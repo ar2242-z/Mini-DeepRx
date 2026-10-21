@@ -17,12 +17,12 @@ seedList = @(x) isnumeric(x) && isvector(x) && ~isempty(x) && ...
 positiveInteger = @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x>=1 && x==fix(x);
 addParameter(p,'TrainingSeeds',42:46,seedList);       % FIVE master seeds.
 addParameter(p,'ValidationSeeds',1001:1002,seedList); % Never used for gradients.
-addParameter(p,'SamplesPerSeed',100,positiveInteger); % Fresh slots per master seed PER EPOCH.
+addParameter(p,'SamplesPerSeed',200,positiveInteger); % Fresh slots per master seed PER EPOCH.
 addParameter(p,'ValidationSamplesPerSeed',50,positiveInteger); % Fixed held-out slots.
 addParameter(p,'SNRValues',0:5:20,@(x) isnumeric(x) && isvector(x) && ~isempty(x) && isreal(x) && all(isfinite(x)));
 addParameter(p,'DopplerValues',0:100:500,@(x) isnumeric(x) && isvector(x) && ~isempty(x) && isreal(x) && all(isfinite(x) & x>=0));
-addParameter(p,'MaxEpochs',20,positiveInteger);       % Passes over the dataset.
-addParameter(p,'MiniBatchSize',10,positiveInteger);  % Slots per gradient update.
+addParameter(p,'MaxEpochs',60,positiveInteger);       % Passes over the dataset.
+addParameter(p,'MiniBatchSize',4,positiveInteger);    % Slots per gradient update.
 addParameter(p,'LearningRate',1e-3,@(x) isnumeric(x) && isscalar(x) && isreal(x) && isfinite(x) && x>0);
 addParameter(p,'InitializationSeed',7,@(x) seedList(x) && isscalar(x));
 addParameter(p,'ExecutionEnvironment','auto',@(x) any(strcmp(x,{'auto','cpu','gpu'})));
@@ -61,8 +61,9 @@ assert(isempty(intersect(trainingPlan.Seed,validationSamples.Seed)));
 trainingSamples = trainingPlan(trainingPlan.Epoch==1,:);
 [Z,bitLabels,bitMask] = makeDataset(baseCfg,trainingSamples);
 [validationZ,validationLabels,validationMask] = makeDataset(baseCfg,validationSamples);
-% Z dimensions: frequency x time x features x samples (72 x 14 x 10 x 500).
-% network_data.mat stores the FIRST epoch; trainingPlan records every epoch.
+% Z dimensions: frequency x time x features x samples (312 x 14 x 10 x 500).
+% Labels/masks: frequency x time x bits per symbol x samples (4 for 16QAM).
+% network_data.mat stores the FIRST epoch; trainingPlan records every epoch.    
 save(fullfile(folder,'network_data.mat'),'Z','bitLabels','bitMask', ...
     'validationZ','validationLabels','validationMask', ...
     'trainingSamples','trainingPlan','validationSamples','training','baseCfg','-v7.3');
@@ -74,11 +75,11 @@ if training.PrepareOnly
     return;
 end
 
-%% 3. Build the five-block CNN
+%% 3. Build the 11-block CNN (paper Table I)
 previousRng = rng;
 rngCleanup = onCleanup(@() rng(previousRng));
 rng(training.InitializationSeed,'twister');
-net = buildCNN([size(Z,1),size(Z,2),size(Z,3)]);
+net = buildCNN([size(Z,1),size(Z,2),size(Z,3)],size(bitLabels,3));
 useGPU = ~strcmp(training.ExecutionEnvironment,'cpu') && canUseGPU;
 assert(~strcmp(training.ExecutionEnvironment,'gpu') || useGPU, ...
     'GPU was requested but is unavailable. Select cpu or auto.');
@@ -129,6 +130,7 @@ for epoch = 1:training.MaxEpochs
         model.Training = training;
         model.BestEpoch = epoch;
         model.InputSize = [size(Z,1),size(Z,2),size(Z,3)];
+        model.Modulation = baseCfg.Modulation;
         model.ScoreConvention = 'positive means bit 1';
         model.FeatureOrder = 'real([Y,Xp,Hraw]), imag([Y,Xp,Hraw])';
         model.TrainingSamples = trainingPlan(trainingPlan.Epoch<=epoch,:);
@@ -180,8 +182,9 @@ end
 function [Z,labels,mask] = makeDataset(baseCfg,samples)
     count = height(samples);
     F = 12*baseCfg.NumResourceBlocks; N = 14;
+    q = 2*(1+strcmp(baseCfg.Modulation,'16QAM')); % Bits per symbol.
     Z = zeros(F,N,4*baseCfg.NumReceiveAntennas+2,count,'single');
-    labels = zeros(F,N,2,count,'single'); mask = false(F,N,2,count);
+    labels = zeros(F,N,q,count,'single'); mask = false(F,N,q,count);
     for k = 1:count
         cfg = baseCfg; cfg.Seed = samples.Seed(k);
         cfg.SNRdB = samples.SNRdB(k); cfg.MaximumDopplerShift = samples.DopplerHz(k);
@@ -190,14 +193,16 @@ function [Z,labels,mask] = makeDataset(baseCfg,samples)
     end
 end
 
-function net = buildCNN(inputSize)
-    % Compact DeepRx: width 32, five residual blocks, depth multiplier 2.
+function net = buildCNN(inputSize,numBits)
+    % DeepRx Table I: 64-wide input conv, eleven residual blocks,
+    % depth multiplier 2, and B = numBits output channels (4 for 16QAM).
     % These are (frequency,time) dilations, not the paper's (time,frequency).
-    dilations = [1 1; 3 2; 6 3; 3 2; 1 1];
+    dilations = [1 1; 1 1; 3 2; 3 2; 3 2; 6 3; 3 2; 3 2; 3 2; 1 1; 1 1];
+    widths = [64 64 128 128 256 256 256 128 128 64 64];
     graph = layerGraph([
         imageInputLayer(inputSize,'Normalization','none','Name','input')
-        convolution2dLayer(3,32,'Padding','same','Name','input_conv')]);
-    previous = 'input_conv';
+        convolution2dLayer(3,widths(1),'Padding','same','Name','input_conv')]);
+    previous = 'input_conv'; previousWidth = widths(1);
     for b = 1:size(dilations,1)
         prefix = sprintf('block%d_',b);
         block = [
@@ -205,19 +210,26 @@ function net = buildCNN(inputSize)
             reluLayer('Name',[prefix 'relu1'])
             groupedConvolution2dLayer(3,2,'channel-wise','Padding','same', ...
                 'DilationFactor',dilations(b,:),'Name',[prefix 'depth1'])
-            convolution2dLayer(1,32,'Name',[prefix 'point1'])
+            convolution2dLayer(1,widths(b),'Name',[prefix 'point1'])
             batchNormalizationLayer('Name',[prefix 'bn2'])
             reluLayer('Name',[prefix 'relu2'])
             groupedConvolution2dLayer(3,2,'channel-wise','Padding','same', ...
                 'DilationFactor',dilations(b,:),'Name',[prefix 'depth2'])
-            convolution2dLayer(1,32,'Name',[prefix 'point2'])
+            convolution2dLayer(1,widths(b),'Name',[prefix 'point2'])
             additionLayer(2,'Name',[prefix 'add'])];
         graph = addLayers(graph,block);
         graph = connectLayers(graph,previous,[prefix 'bn1']);
-        graph = connectLayers(graph,previous,[prefix 'add/in2']);
-        previous = [prefix 'add'];
+        if widths(b)==previousWidth
+            graph = connectLayers(graph,previous,[prefix 'add/in2']);
+        else
+            % 1x1 projection so the skip path matches the new width.
+            graph = addLayers(graph,convolution2dLayer(1,widths(b),'Name',[prefix 'skip']));
+            graph = connectLayers(graph,previous,[prefix 'skip']);
+            graph = connectLayers(graph,[prefix 'skip'],[prefix 'add/in2']);
+        end
+        previous = [prefix 'add']; previousWidth = widths(b);
     end
-    graph = addLayers(graph,convolution2dLayer(3,2,'Padding','same','Name','bit_scores'));
+    graph = addLayers(graph,convolution2dLayer(3,numBits,'Padding','same','Name','bit_scores'));
     graph = connectLayers(graph,previous,'bit_scores');
     net = dlnetwork(graph);
 end

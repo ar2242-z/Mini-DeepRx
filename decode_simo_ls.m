@@ -6,7 +6,8 @@ function [results, sigma2Hat] = decode_simo_ls(data)
 % The sweep uses this second form to reuse exactly the same receiver.
 % Arrays use (frequency,time,receive antenna), matching 5G Toolbox.
 % Equations (1)-(3) in DeepRx: Y=H*X+noise, pilot LS, then LMMSE.
-% No LDPC is used: the reported BER compares uncoded QPSK data bits.
+% No LDPC is used: the reported BER compares uncoded data bits
+% (16QAM by default; see Modulation in simo_config).
 
 %% 1. Load the experiment
 folder = fileparts(mfilename('fullpath'));
@@ -19,6 +20,9 @@ end
 Y = data.Y;
 pilotMask = data.meta.PilotMask;
 dataIndices = data.meta.DataIndices;
+assert(isfield(data.meta,'Modulation'), ...
+    'Saved slot predates the Modulation setting; rerun mini_simo_tdl.');
+modulation = data.meta.Modulation;
 % In a real receiver, pilots are generated from the known configuration.
 % Here copy ONLY known pilot symbols; unknown data symbols stay zero.
 pilotGrid = zeros(size(pilotMask));
@@ -40,8 +44,8 @@ end
 % simulator noise variance, actual noise samples, SNR, or noiseless Y.
 XhatKnown = equalizeSIMO(Y, data.H, sigma2Hat);
 XhatLS = equalizeSIMO(Y, Hls, sigma2Hat);
-bitsKnown = demapQPSK(XhatKnown(dataIndices));
-bitsLS = demapQPSK(XhatLS(dataIndices));
+bitsKnown = demapHard(XhatKnown(dataIndices), modulation);
+bitsLS = demapHard(XhatLS(dataIndices), modulation);
 
 %% 4. Evaluate against transmitted bits (used only here, not in detection)
 referenceBits = data.meta.Bits;
@@ -60,14 +64,14 @@ fprintf('One-slot result: zero errors does not imply zero long-run BER.\n');
 % Channel NMSE is a diagnostic; true H is not used to obtain Hls or sigma2Hat.
 channelNMSE = sum(abs(Hls(:)-data.H(:)).^2) / sum(abs(data.H(:)).^2);
 fprintf('LS channel normalized mean-square error: %.6g\n', channelNMSE);
-checkReceiver();
+checkReceiver(modulation);
 save(fullfile(folder,'decode_simo_ls_results.mat'), ...
     'Hls','sigma2Hat','sigmaHat','pilotInfo','XhatKnown','XhatLS', ...
     'bitsKnown','bitsLS','results','channelNMSE');
 
 %% 5. Plot channel estimates, equalized symbols, and measured BER
 plotReceiver(data.H, Hls, XhatKnown(dataIndices), XhatLS(dataIndices), ...
-    [berKnown berLS], [errorsKnown errorsLS], numBits);
+    [berKnown berLS], [errorsKnown errorsLS], numBits, modulation);
 end
 end
 
@@ -112,29 +116,41 @@ function Xhat = equalizeSIMO(Y, H, sigma2Hat)
     % Eq. (3), specialized to ONE transmitted stream:
     % Xhat = sum_r conj(H_r)*Y_r / (sum_r |H_r|^2 + sigma^2).
     % sum(...,3) combines the receive antennas and leaves a frequency-time grid.
-    denominator = sum(abs(H).^2,3) + sigma2Hat;
-    Xhat = sum(conj(H).*Y,3) ./ max(denominator,eps);
+    gain = sum(abs(H).^2,3);
+    Xhat = sum(conj(H).*Y,3) ./ max(gain + sigma2Hat,eps);
+    % The LMMSE output is biased: E[Xhat|x] = g*x, g = gain/(gain+sigma^2) < 1.
+    % Signs (QPSK) do not care, but 16QAM amplitude decisions would be pulled
+    % toward the inner points. Remove g (unbiased LMMSE) before demapping.
+    % For one stream this equals MRC, so sigma2Hat no longer changes hard
+    % decisions; it still matters for soft reliability.
+    Xhat = Xhat ./ max(gain ./ (gain + sigma2Hat),eps);
 end
 
-function bits = demapQPSK(symbols)
-    % 5G QPSK: bit 1 controls the real sign, bit 2 the imaginary sign.
-    % Negative component -> bit 1; nonnegative component -> bit 0.
-    bits = zeros(2*numel(symbols),1);
-    bits(1:2:end) = real(symbols)<0;
-    bits(2:2:end) = imag(symbols)<0;
-    % For QPSK hard decisions, positive LMMSE denominator scaling does NOT
-    % change signs. Noise power matters for amplitudes and soft reliability,
-    % but changing it alone will not change this uncoded QPSK BER.
+function bits = demapHard(symbols, modulation)
+    % 5G mapping (TS 38.211 5.1.3/5.1.4). Negative component -> bit 1.
+    % QPSK:  b1 real sign, b2 imaginary sign.
+    % 16QAM: b1,b2 as QPSK (quadrant); b3,b4 = 1 for the OUTER level
+    %        (|component| = 3/sqrt(10), beyond the 2/sqrt(10) boundary).
+    q = 2*(1+strcmp(modulation,'16QAM'));
+    bits = zeros(q*numel(symbols),1);
+    bits(1:q:end) = real(symbols)<0;
+    bits(2:q:end) = imag(symbols)<0;
+    if q == 4
+        bits(3:q:end) = abs(real(symbols))>2/sqrt(10);
+        bits(4:q:end) = abs(imag(symbols))>2/sqrt(10);
+    end
 end
 
-function checkReceiver()
-    % Check all QPSK labels and a noiseless two-antenna link independently
-    % of the saved data; also verify the noise estimator on a linear channel.
-    b = [0;0;0;1;1;0;1;1];
-    x = nrSymbolModulate(b,'QPSK');
-    h = repmat(reshape([1+1i, -0.3+0.7i],1,1,2),4,1,1);
+function checkReceiver(modulation)
+    % Check every constellation label and a noiseless two-antenna link
+    % independently of the saved data; also verify the noise estimator.
+    q = 2*(1+strcmp(modulation,'16QAM'));
+    b = reshape(dec2bin(0:2^q-1,q).'=='1',[],1);
+    x = nrSymbolModulate(double(b),modulation);
+    h = repmat(reshape([1+1i, -0.3+0.7i],1,1,2),numel(x),1,1);
     recovered = equalizeSIMO(h.*x,h,0.1);
-    assert(isequal(demapQPSK(recovered),b), 'QPSK/SIMO check failed.');
+    assert(isequal(demapHard(recovered,modulation),double(b)), ...
+        '%s/SIMO check failed.',modulation);
     f = (1:72).';
     mask = false(72,14); mask(1:2:end,3) = true;
     pilots = double(mask);
@@ -149,7 +165,7 @@ function checkReceiver()
     fprintf('Receiver checks passed.\n');
 end
 
-function plotReceiver(H, Hls, knownSymbols, lsSymbols, bers, errors, numBits)
+function plotReceiver(H, Hls, knownSymbols, lsSymbols, bers, errors, numBits, modulation)
     figure('Name','True and LS channel');
     Nr = size(H,3);
     magnitudeMax = max([abs(H(:));abs(Hls(:));eps]);
@@ -168,7 +184,8 @@ function plotReceiver(H, Hls, knownSymbols, lsSymbols, bers, errors, numBits)
     figure('Name','Receiver comparison');
     symbols = {knownSymbols,lsSymbols};
     names = {'Known H','LS H: one pilot symbol'};
-    ideal = [1+1i;1-1i;-1+1i;-1-1i]/sqrt(2);
+    q = 2*(1+strcmp(modulation,'16QAM'));
+    ideal = nrSymbolModulate(double(reshape(dec2bin(0:2^q-1,q).'=='1',[],1)),modulation);
     limit = 1.1*max([abs(real([knownSymbols;lsSymbols])); ...
         abs(imag([knownSymbols;lsSymbols]));1]);
     for k = 1:2
@@ -177,7 +194,7 @@ function plotReceiver(H, Hls, knownSymbols, lsSymbols, bers, errors, numBits)
         plot(real(ideal),imag(ideal),'rx','LineWidth',2,'MarkerSize',10);
         axis equal; xlim([-limit limit]); ylim([-limit limit]); grid on;
         xlabel('In-phase'); ylabel('Quadrature'); title(names{k});
-        legend('Equalized data','Ideal QPSK','Location','best');
+        legend('Equalized data',['Ideal ' modulation],'Location','best');
     end
     subplot(1,3,3);
     bar(1:2,bers); xticks(1:2); xticklabels({'Known H','LS H'});

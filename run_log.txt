@@ -1,0 +1,7 @@
+Loss-gradient check passed (including zero scores and masked bits).
+Prepared 500 training slots and 100 validation slots.
+Training with GPU: 1. Positive output scores mean bit 1.
+Epoch 1/20: train loss 1.1161, validation loss 0.7937, BER 0.4943
+Epoch 2/20: train loss 0.7505, validation loss 0.7610, BER 0.4951
+Epoch 3/20: train loss 0.7171, validation loss 0.7126, BER 0.4875
+Epoch 4/20: train loss 0.7001, validation loss 0.6940, BER 0.4752

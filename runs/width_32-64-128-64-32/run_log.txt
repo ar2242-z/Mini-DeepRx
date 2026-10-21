@@ -1,0 +1,24 @@
+Loss-gradient check passed (including zero scores and masked bits).
+Prepared 500 training slots and 100 validation slots.
+Training with GPU: 1. Positive output scores mean bit 1.
+Epoch 1/20: train loss 0.8098, validation loss 0.7291, BER 0.4991
+Epoch 2/20: train loss 0.7138, validation loss 0.7069, BER 0.4965
+Epoch 3/20: train loss 0.7001, validation loss 0.6978, BER 0.4897
+Epoch 4/20: train loss 0.6954, validation loss 0.6912, BER 0.4745
+Epoch 5/20: train loss 0.6904, validation loss 0.6853, BER 0.4519
+Epoch 6/20: train loss 0.6852, validation loss 0.6772, BER 0.4346
+Epoch 7/20: train loss 0.6632, validation loss 0.6370, BER 0.3713
+Epoch 8/20: train loss 0.6106, validation loss 0.5635, BER 0.2961
+Epoch 9/20: train loss 0.5464, validation loss 0.4580, BER 0.2111
+Epoch 10/20: train loss 0.4566, validation loss 0.3994, BER 0.1744
+Epoch 11/20: train loss 0.4181, validation loss 0.3624, BER 0.1564
+Epoch 12/20: train loss 0.4113, validation loss 0.3469, BER 0.1492
+Epoch 13/20: train loss 0.3830, validation loss 0.3267, BER 0.1408
+Epoch 14/20: train loss 0.3902, validation loss 0.3234, BER 0.1391
+Epoch 15/20: train loss 0.3790, validation loss 0.3228, BER 0.1401
+Epoch 16/20: train loss 0.3632, validation loss 0.3080, BER 0.1325
+Epoch 17/20: train loss 0.3557, validation loss 0.3013, BER 0.1307
+Epoch 18/20: train loss 0.3774, validation loss 0.3146, BER 0.1389
+Epoch 19/20: train loss 0.3532, validation loss 0.2899, BER 0.1269
+Epoch 20/20: train loss 0.3580, validation loss 0.2871, BER 0.1234
+Saved trained_network.mat; best validation epoch: 20.

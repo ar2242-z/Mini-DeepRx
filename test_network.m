@@ -3,7 +3,8 @@ function [snrResults,dopplerResults] = test_network(varargin)
 % Run after network has completed training: test_network
 % Or choose another seed: test_network('TestSeed',9002)
 % SNR: 0:2.5:20 dB at 100 Hz. Doppler: 0:100:500 Hz at 20 dB.
-% Each point is ONE slot (1944 data bits), not a long-run BER estimate.
+% Each point is ONE slot, not a long-run BER estimate.
+% The modulation comes from the model's saved BaseConfig (16QAM by default).
 % For a less noisy comparison: test_network('TestSeed',9001,'NumTrials',100)
 % This uses seeds 9001:9100 and pools errors and bits at each sweep point.
 
@@ -28,6 +29,8 @@ end
 assert(isempty(intersect(testSeeds,usedSeeds)), ...
     'Test seeds must differ from all training and validation simulation/master seeds.');
 cfg = model.BaseConfig;
+assert(isfield(cfg,'Modulation'), ...
+    'trained_network.mat predates the Modulation setting; retrain with network.');
 cfg.Seed = options.TestSeed;
 cfg.SNRdB = 20; cfg.MaximumDopplerShift = 100;
 cfg.ShowPlots = false; cfg.RunChecks = false;

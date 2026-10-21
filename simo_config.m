@@ -1,3 +1,4 @@
+
 function cfg = simo_config(varargin)
 %SIMO_CONFIG Create settings for the mini SIMO experiment.
 %   cfg = simo_config() returns all default settings as a structure.
@@ -23,8 +24,11 @@ function cfg = simo_config(varargin)
     addParameter(p,'NumReceiveAntennas',2,positiveInteger);
     addParameter(p,'DelaySpread',300e-9,positiveScalar); % RMS delay spread, seconds.
     addParameter(p,'MaximumDopplerShift',100,nonnegativeScalar); % Hz; 0 is static.
+    % Data modulation (5G TS 38.211 mapping); pilots are unaffected.
+    addParameter(p,'Modulation','16QAM', ...
+        @(x) (ischar(x) || isstring(x)) && any(strcmp(x,{'QPSK','16QAM'})));
     % Default operating point: 20 dB and 100 Hz. Inf means no added noise.
-    addParameter(p,'SNRdB',20, ...
+    addParameter(p,'SNRdB',10, ...
         @(x) isnumeric(x) && isscalar(x) && isreal(x) && (isfinite(x) || x==Inf));
     addParameter(p,'Seed',42, ...
         @(x) nonnegativeScalar(x) && x==fix(x) && x<=2^32-1);
@@ -34,6 +38,7 @@ function cfg = simo_config(varargin)
     addParameter(p,'Verbose',true,logicalScalar);  % Print per-slot information.
     parse(p,varargin{:});
     cfg = p.Results;
+    cfg.Modulation = char(cfg.Modulation);
     assert(cfg.NumResourceBlocks<=275,'NumResourceBlocks must not exceed 275.');
     assert(cfg.Nfft>12*cfg.NumResourceBlocks, ...
         'Nfft must exceed the number of active subcarriers (12*NumResourceBlocks).');

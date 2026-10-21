@@ -70,7 +70,8 @@ function [X, H, Y, meta] = generateSlot(cfg)
     carrier.NCellID = 0;
     ofdm = nrOFDMInfo(carrier, 'Nfft', cfg.Nfft);
 
-    [X, dataMask, pilotMask, bits, dataIndices] = makeGrid(carrier, stream);
+    [X, dataMask, pilotMask, bits, dataIndices, bitsPerSymbol] = ...
+        makeGrid(carrier, cfg.Modulation, stream);
     numSymbols = size(X,2); % Columns are OFDM symbols (time).
 
     channel = nrTDLChannel;
@@ -108,7 +109,8 @@ function [X, H, Y, meta] = generateSlot(cfg)
     H = hGrid(:,1:numSymbols,:,1);
     noiselessY = rxGrid(:,1:numSymbols,:);
 
-    % QPSK has unit symbol power and the average channel power is normalized.
+    % 5G QPSK/16QAM have unit AVERAGE symbol power (16QAM scaled by 1/sqrt(10))
+    % and the average channel power is normalized.
     % SNR is Es/N0 per occupied resource element, per receive branch, averaged
     % over channel realizations. It is NOT the measured SNR of this one slot,
     % nor the full-band SNR convention in the paper.
@@ -122,8 +124,10 @@ function [X, H, Y, meta] = generateSlot(cfg)
     meta.DataMask = dataMask;
     meta.PilotMask = pilotMask;
     meta.Bits = bits;
-    % bits(2*k-1:2*k) label X(meta.DataIndices(k)).
+    % With Q = meta.BitsPerSymbol, bits(Q*(k-1)+(1:Q)) label X(meta.DataIndices(k)).
     meta.DataIndices = dataIndices;
+    meta.Modulation = cfg.Modulation;
+    meta.BitsPerSymbol = bitsPerSymbol;
     meta.NoiseVariance = noiseVariance;
     meta.Noise = noise;
     meta.NoiselessY = noiselessY;
@@ -136,14 +140,15 @@ function [X, H, Y, meta] = generateSlot(cfg)
     release(channel);
 end
 
-function [grid, dataMask, pilotMask, bits, dataIndices] = makeGrid(carrier, stream)
+function [grid, dataMask, pilotMask, bits, dataIndices, bitsPerSymbol] = ...
+        makeGrid(carrier, modulation, stream)
     % Use standard uplink pilot positions and sequences from 5G Toolbox.
     pusch = nrPUSCHConfig;
     pusch.PRBSet = 0:carrier.NSizeGrid-1; % Toolbox PRB numbers start at zero.
     pusch.SymbolAllocation = [0 14];    % Start at symbol 0; use 14 symbols.
     pusch.MappingType = 'A';
     pusch.NumLayers = 1;
-    pusch.Modulation = 'QPSK';
+    pusch.Modulation = modulation;
     pusch.TransformPrecoding = false;
     pusch.EnablePTRS = false;
     pusch.DMRS.DMRSTypeAPosition = 2;    % Symbol 2 means MATLAB column 3.
@@ -154,8 +159,9 @@ function [grid, dataMask, pilotMask, bits, dataIndices] = makeGrid(carrier, stre
     dataIndices = nrPUSCHIndices(carrier, pusch);
     pilotIndices = nrPUSCHDMRSIndices(carrier, pusch);
     pilots = nrPUSCHDMRS(carrier, pusch);
-    bits = randi(stream, [0 1], 2*numel(dataIndices), 1);
-    symbols = nrSymbolModulate(bits, 'QPSK'); % Two bits per unit-power symbol.
+    bitsPerSymbol = 2*(1+strcmp(modulation,'16QAM')); % QPSK: 2, 16QAM: 4.
+    bits = randi(stream, [0 1], bitsPerSymbol*numel(dataIndices), 1);
+    symbols = nrSymbolModulate(bits, modulation); % Unit average power.
     grid = nrResourceGrid(carrier, 1);
     grid(dataIndices) = symbols;
     grid(pilotIndices) = pilots;
@@ -171,7 +177,8 @@ function checkSimulation(X, H, Y, meta, cfg)
     assert(size(H,3)==cfg.NumReceiveAntennas && isequal(size(H),size(Y)));
     assert(all(isfinite(Y(:))) && all(isfinite(H(:))));
     assert(~any(meta.DataMask(:) & meta.PilotMask(:)));
-    expectedSymbols = nrSymbolModulate(meta.Bits, 'QPSK');
+    assert(numel(meta.Bits) == meta.BitsPerSymbol*numel(meta.DataIndices));
+    expectedSymbols = nrSymbolModulate(meta.Bits, meta.Modulation);
     assert(max(abs(X(meta.DataIndices)-expectedSymbols)) < 1e-12);
 
     % A separate static, noiseless run checks FFT scaling and timing alignment.

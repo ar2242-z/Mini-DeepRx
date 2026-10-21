@@ -1,7 +1,8 @@
-%% BER sweeps: SNR and maximum Doppler shift
+    %% BER sweeps: SNR and maximum Doppler shift
 % Run this file. It calls the existing generator and receiver functions.
 % Both curves use pilot-estimated noise power, never the simulator variance.
-% One pilot-bearing OFDM symbol, two receive antennas, uncoded QPSK.
+% One pilot-bearing OFDM symbol, two receive antennas, uncoded 16QAM
+% (the Modulation default in simo_config).
 
 %% 1. Settings
 snrValues = 0:2.5:20;          % dB; hold Doppler at 100 Hz.

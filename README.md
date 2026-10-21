@@ -1,6 +1,6 @@
 # Mini DeepRx simulation in MATLAB
 
-A SIMO OFDM experiment with one transmit antenna, two receive antennas, a TDL-C channel, QPSK, and one pilot-bearing OFDM symbol. It compares a known-channel receiver, an LS-based receiver, and a small DeepRx-style CNN. BER is uncoded; LDPC is not implemented.
+A SIMO OFDM experiment with one transmit antenna, two receive antennas, a TDL-C channel, 16QAM data (QPSK selectable), and one pilot-bearing OFDM symbol. It compares a known-channel receiver, an LS-based receiver, and a small DeepRx-style CNN. BER is uncoded; LDPC is not implemented.
 
 Run commands from this folder in MATLAB. Signal generation needs 5G Toolbox; CNN training and inference also need Deep Learning Toolbox. GPU execution uses Parallel Computing Toolbox when available.
 
@@ -8,10 +8,10 @@ Run commands from this folder in MATLAB. Signal generation needs 5G Toolbox; CNN
 |---|---|---|
 | `simo_config.m` | Creates and validates simulation settings: PRBs, subcarrier spacing, SNR, Doppler, antennas, delay spread, and random seed. | `cfg = simo_config('SNRdB',10);` |
 | `mini_simo_tdl.m` | Generates data and pilots, OFDM-modulates them, applies TDL-C, demodulates, and adds noise. Returns `X`, true `H`, received `Y`, and supporting information in `meta`. Includes checks and channel/grid plots. | `[X,H,Y,meta] = mini_simo_tdl(cfg);` |
-| `decode_simo_ls.m` | Compares known H against LS estimation from one pilot-bearing symbol. Estimates noise power from pilots, performs LMMSE antenna combining/equalization, demodulates QPSK, and calculates BER. Plots channels, constellations, and BER when run without inputs. | `decode_simo_ls;` after generating a saved slot. |
+| `decode_simo_ls.m` | Compares known H against LS estimation from one pilot-bearing symbol. Estimates noise power from pilots, performs LMMSE antenna combining/equalization (bias-removed for 16QAM amplitude decisions), hard-demaps 16QAM, and calculates BER. Plots channels, constellations, and BER when run without inputs. | `decode_simo_ls;` after generating a saved slot. |
 | `sweep.m` | Generates independent trials and plots known-H and LS BER versus SNR and Doppler. Uses 100 trials per point by default. | `sweep;` |
 | `deeprx_sample.m` | Shared helper that assembles real-valued CNN input `Z`, target bit grids, and the mask excluding pilots from the loss. Used by both training and testing. | Normally called automatically. |
-| `network.m` | Generates training/validation data, builds a five-block residual CNN, trains with masked binary cross-entropy and Adam, saves the best validation checkpoint, and plots training history. | `network;` |
+| `network.m` | Generates training/validation data, builds the 11-block residual CNN from the paper's Table I, trains with masked binary cross-entropy and Adam, saves the best validation checkpoint, and plots training history. | `network;` |
 | `test_network.m` | Loads the trained CNN and compares CNN, LS, and known-H BER on unseen seeds across both sweeps. Saves results and plots. | `test_network('TestSeed',9001);` |
 
 **Typical run order**
@@ -37,14 +37,14 @@ test_network('TestSeed',9001,'NumTrials',20);
 
 **Settings and dimensions**
 
-The current defaults in `simo_config.m` are **26 PRBs**, **15 kHz** subcarrier spacing, **20 dB** SNR, **100 Hz** maximum Doppler, **300 ns** RMS delay spread, FFT size **512**, and seed **42**. Each PRB contains 12 subcarriers, so the current grid has 312 subcarriers and 14 OFDM symbols.
+The current defaults in `simo_config.m` are **16QAM** data, **26 PRBs**, **15 kHz** subcarrier spacing, **20 dB** SNR, **100 Hz** maximum Doppler, **300 ns** RMS delay spread, FFT size **512**, and seed **42**. Each PRB contains 12 subcarriers, so the current grid has 312 subcarriers and 14 OFDM symbols.
 
 Arrays use toolbox order: **frequency, time, antenna/feature**:
 
 - `X`: `312 × 14`; transmitted data and pilots.
 - `H`, `Y`: `312 × 14 × 2`; true channel and received signals.
 - `Z`: `312 × 14 × 10` per sample; real and imaginary parts of `[Y, Xp, Hraw]`, where `Xp` is the pilot-only grid and `Hraw = Y .* conj(Xp)`.
-- Bit labels and masks: `312 × 14 × 2`; two QPSK bits per resource element.
+- Bit labels and masks: `312 × 14 × 4`; four 16QAM bits per resource element (quadrant bits first, as in the paper). QPSK gives `312 × 14 × 2`.
 - Training batches add a fourth dimension for samples.
 
 Change defaults in `simo_config.m`, or override settings for a single generation call:
@@ -57,7 +57,7 @@ cfg = simo_config('NumResourceBlocks',12,'SubcarrierSpacing',30, ...
 
 `Nfft` must exceed `12 * NumResourceBlocks`. A local `cfg` override does not change settings inside `network` or `sweep`; those functions create their own configuration. Change shared defaults before retraining if you want a different grid. `test_network` uses the configuration saved with the model.
 
-Some older comments and saved results refer to the earlier 6-PRB, 72-subcarrier experiment. Regenerate data and retrain after changing the grid or waveform settings.
+Some older comments and saved results refer to the earlier 6-PRB, 72-subcarrier experiment. Regenerate data and retrain after changing the grid, waveform, or modulation settings; slots and models saved before the `Modulation` setting existed (QPSK) are rejected. Use `simo_config('Modulation','QPSK')` for the old behaviour.
 
 **Training and sweep controls**
 

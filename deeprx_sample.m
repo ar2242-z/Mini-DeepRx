@@ -10,13 +10,15 @@ function [Z, bitLabels, bitMask] = deeprx_sample(Y,X,meta)
     Z = single(cat(3,real(Zc),imag(Zc)));
     assert(all(isfinite(Z(:))),'Network inputs must be finite.');
 
-    % The two target planes hold the first and second QPSK bit.
-    bitLabels = zeros(size(X,1),size(X,2),2,'single');
-    for b = 1:2
+    % One target plane per bit of the symbol (4 for 16QAM). As in the paper,
+    % planes 1-2 are the quadrant bits and planes 3-4 refine within it.
+    q = meta.BitsPerSymbol;
+    bitLabels = zeros(size(X,1),size(X,2),q,'single');
+    for b = 1:q
         plane = zeros(size(X),'single');
-        plane(meta.DataIndices) = single(meta.Bits(b:2:end));
+        plane(meta.DataIndices) = single(meta.Bits(b:q:end));
         bitLabels(:,:,b) = plane;
     end
-    bitMask = repmat(meta.DataMask,1,1,2);
+    bitMask = repmat(meta.DataMask,1,1,q);
     assert(nnz(bitMask)==numel(meta.Bits),'Target mask and bit count disagree.');
 end
