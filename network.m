@@ -21,7 +21,7 @@ addParameter(p,'SamplesPerSeed',200,positiveInteger); % Fresh slots per master s
 addParameter(p,'ValidationSamplesPerSeed',50,positiveInteger); % Fixed held-out slots.
 addParameter(p,'SNRValues',0:5:20,@(x) isnumeric(x) && isvector(x) && ~isempty(x) && isreal(x) && all(isfinite(x)));
 addParameter(p,'DopplerValues',0:100:500,@(x) isnumeric(x) && isvector(x) && ~isempty(x) && isreal(x) && all(isfinite(x) & x>=0));
-addParameter(p,'MaxEpochs',60,positiveInteger);       % Passes over the dataset.
+addParameter(p,'MaxEpochs',200,positiveInteger);       % Passes over the dataset.
 addParameter(p,'MiniBatchSize',4,positiveInteger);    % Slots per gradient update.
 addParameter(p,'LearningRate',1e-3,@(x) isnumeric(x) && isscalar(x) && isreal(x) && isfinite(x) && x>0);
 addParameter(p,'InitializationSeed',7,@(x) seedList(x) && isscalar(x));
