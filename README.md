@@ -13,6 +13,7 @@ Run commands from this folder in MATLAB. Signal generation needs 5G Toolbox; CNN
 | `deeprx_sample.m` | Shared helper that assembles real-valued CNN input `Z`, target bit grids, and the mask excluding pilots from the loss. Used by both training and testing. | Normally called automatically. |
 | `network.m` | Generates training/validation data, builds the 11-block residual CNN from the paper's Table I, trains with masked binary cross-entropy and Adam, saves the best validation checkpoint, and plots training history. | `network;` |
 | `test_network.m` | Loads the trained CNN and compares CNN, LS, and known-H BER on unseen seeds across both sweeps. Saves results and plots. | `test_network('TestSeed',9001);` |
+| `TCNN.m` | TCNN/FEQ (Pihlajasalo et al. 2023, Sec. III-C): a 5-block residual CNN on the received **time** samples, followed by fixed, differentiable FFT, LS/LMMSE and max-log demapping layers identical to `decode_simo_ls.m`. Trains end to end on bits with dithered PAs (30 training, 10 unseen validation PAs) and random back-off. Epoch 0 is the plain LS receiver; also reports validation BER versus back-off. | `TCNN;` |
 
 **Typical run order**
 
@@ -46,6 +47,7 @@ Arrays use toolbox order: **frequency, time, antenna/feature**:
 - `Z`: `312 × 14 × 10` per sample; real and imaginary parts of `[Y, Xp, Hraw]`, where `Xp` is the pilot-only grid and `Hraw = Y .* conj(Xp)`.
 - Bit labels and masks: `312 × 14 × 4`; four 16QAM bits per resource element (quadrant bits first, as in the paper). QPSK gives `312 × 14 × 2`.
 - Training batches add a fourth dimension for samples.
+- `meta.TimeDomainY`: `552 × 14 × 2`; the same received signal before the FFT, one column per OFDM symbol with its cyclic prefix, zero-padded so the FFT window is rows 21–532 in every column. `meta.TimeGrid` holds the window rows, active FFT bins, and phase correction that map it exactly to `Y`. Noise and interference are added to these time samples (variance `10^(-SNRdB/10)/Nfft` per sample, so each subcarrier keeps the same SNR); results are statistically unchanged, but slot-by-slot noise draws differ from runs before this change.
 
 Change defaults in `simo_config.m`, or override settings for a single generation call:
 
@@ -101,6 +103,8 @@ Edit `snrValues`, `dopplerValues`, `numTrials`, and `baseCfg` at the top of `swe
 | `sweep_results.mat`, `sweep_*.png` | Conventional BER sweeps and plots. |
 | `network_data.mat` | First-epoch inputs/labels/masks, fixed validation data, and the seed plan for all epochs. |
 | `trained_network.mat`, `network_training.png` | Best CNN checkpoint, training settings/history, and learning curves. |
+| `tcnn_data.mat` | TCNN first-epoch time-domain inputs, validation data, PA banks, and receiver operators. About 150 MB at defaults, so it is git-ignored. |
+| `trained_tcnn.mat`, `tcnn_training.png`, `tcnn_backoff.png` | Best TCNN checkpoint with its fixed receiver, PA banks, history, and validation BER versus back-off (LS versus TCNN/FEQ). |
 | `network_test_results.mat`, `network_test_*.png` | CNN and baseline test comparisons. |
 
 Reruns replace their corresponding outputs. Files in `cnn_audit_before` and `cnn_audit_after_single` are historical snapshots, not the current implementation; do not add those folders to the MATLAB path.

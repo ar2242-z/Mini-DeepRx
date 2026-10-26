@@ -8,6 +8,8 @@ function [X, H, Y, meta] = mini_simo_channel(cfg)
 % H(f,n,r) : true channel response, NOT a pilot-based estimate.
 % Y(f,n,r) : received complex symbol, including noise (and interference
 %            when cfg.SIRdB is finite).
+% meta.TimeDomainY(t,n,r): the same received signal BEFORE the FFT, with
+%            CP, one column per OFDM symbol (552 x 14 x 2 by default).
 % n = OFDM symbol (time), f = active subcarrier, r = receive antenna.
 % All grids use toolbox order: (frequency,time,antenna).
 % X has one transmit antenna; MATLAB omits its trailing singleton dimension.
@@ -96,7 +98,11 @@ function [X, H, Y, meta] = generateSlot(cfg)
         channel([waveform; zeros(padding,1)]);
     pathFilters = getPathFilters(channel);
     offset = nrPerfectTimingEstimate(pathGains, pathFilters);
-    rxWaveform = rxWaveform(1+offset:end,:);
+    % Keep exactly this slot's samples: noise and interference are added to
+    % these time samples, so Y and the time grid below share one realization.
+    cpLengths = double(ofdm.CyclicPrefixLengths(1:numSymbols));
+    slotLength = sum(cpLengths) + numSymbols*cfg.Nfft;
+    rxWaveform = rxWaveform(offset+(1:slotLength),:);
     rxGrid = nrOFDMDemodulate(carrier, rxWaveform, 'Nfft', cfg.Nfft);
 
     % Derive ground-truth H from the simulated paths using the SAME timing
@@ -112,7 +118,7 @@ function [X, H, Y, meta] = generateSlot(cfg)
     % spread, and Doppler, and the receiver keeps the wanted user's timing.
     % Its private stream leaves the wanted user's bits, fading, and noise
     % identical to a slot without interference.
-    interference = zeros(size(noiselessY));
+    interferenceTime = zeros(size(rxWaveform));
     if isfinite(cfg.SIRdB)
         interferenceStream = RandStream('mrg32k3a', 'Seed', cfg.Seed);
         interfererCfg = cfg;
@@ -130,11 +136,10 @@ function [X, H, Y, meta] = generateSlot(cfg)
         interfererWaveform = applyPA(interfererWaveform, cfg);
         interfererRx = interfererChannel([interfererWaveform; zeros(padding,1)]);
         release(interfererChannel);
-        interfererGrid = nrOFDMDemodulate(interfererCarrier, ...
-            interfererRx(1+offset:end,:), 'Nfft', cfg.Nfft);
         % Both users have unit symbol power and normalized channels, so this
         % scaling sets the average interference power per occupied RE.
-        interference = sqrt(10^(-cfg.SIRdB/10)) * interfererGrid(:,1:numSymbols,:);
+        interferenceTime = sqrt(10^(-cfg.SIRdB/10)) * ...
+            interfererRx(offset+(1:slotLength),:);
     end
 
     % 5G QPSK/16QAM have unit AVERAGE symbol power (16QAM scaled by 1/sqrt(10))
@@ -142,13 +147,19 @@ function [X, H, Y, meta] = generateSlot(cfg)
     % SNR is Es/N0 per occupied resource element, per receive branch, averaged
     % over channel realizations. It is NOT the measured SNR of this one slot,
     % nor the full-band SNR convention in the paper.
-    % Add circular complex Gaussian noise after FFT: this is equivalent to
-    % white receiver noise on these FFT bins and makes its variance explicit.
+    % White circular Gaussian noise is added to the TIME samples. The
+    % demodulator is an unscaled FFT, so variance noiseVariance/Nfft per
+    % sample gives noiseVariance on every FFT bin, as before.
     % SIR uses the same per-RE reference as SNR.
     noiseVariance = 10^(-cfg.SNRdB/10);
-    noise = sqrt(noiseVariance/2) * ...
-        (randn(stream,size(H)) + 1i*randn(stream,size(H)));
-    Y = noiselessY + interference + noise;
+    noiseTime = sqrt(noiseVariance/cfg.Nfft/2) * ...
+        (randn(stream,size(rxWaveform)) + 1i*randn(stream,size(rxWaveform)));
+    receivedTime = rxWaveform + interferenceTime + noiseTime;
+    demodulate = @(w) nrOFDMDemodulate(carrier, w, 'Nfft', cfg.Nfft);
+    Y = demodulate(receivedTime);
+    noise = demodulate(noiseTime);               % Linear, so Y is the sum of
+    interference = demodulate(interferenceTime); % noiselessY, interference, noise.
+    [Yt, timeGrid] = makeTimeGrid(receivedTime, cpLengths, cfg.Nfft, size(X,1));
 
     meta.DataMask = dataMask;
     meta.PilotMask = pilotMask;
@@ -164,6 +175,10 @@ function [X, H, Y, meta] = generateSlot(cfg)
     meta.SIRdB = cfg.SIRdB;
     meta.Interference = interference; % Zero when SIRdB is Inf.
     meta.NoiselessY = noiselessY;     % Wanted user only: no interference.
+    % Received samples BEFORE the FFT, one column per OFDM symbol, aligned
+    % so the FFT window is the same rows in every column (see makeTimeGrid).
+    meta.TimeDomainY = Yt;
+    meta.TimeGrid = timeGrid;
     meta.PAModel = cfg.PAModel;
     meta.PABackoffdB = cfg.PABackoffdB;
     meta.PAGain = paGain;             % Bussgang gain; 1 when PAModel is 'none'.
@@ -234,6 +249,34 @@ function [y, gain] = applyPA(x, cfg)
     gain = (x'*y)/(x'*x);
 end
 
+function [Yt, info] = makeTimeGrid(waveform, cpLengths, Nfft, numSubcarriers)
+    % One column per OFDM symbol: its cyclic prefix and Nfft samples, zero
+    % padded so the FFT window lands on the SAME rows (info.FFTRows) in every
+    % column. Short-CP symbols get the extra zeros. nrOFDMDemodulate starts
+    % its FFT window fix(0.5*cp) samples into the CP (CyclicPrefixFraction
+    % default) and removes the resulting phase ramp, so with
+    %   Fx = fft(Yt(info.FFTRows,:,:));
+    %   Y  = Fx(info.ActiveBins,:,:) .* info.PhaseCorrection;
+    % reproduces Y exactly. The time CNN relies on this mapping.
+    numSymbols = numel(cpLengths);
+    skip = fix(0.5*cpLengths);   % CP samples before the FFT window.
+    after = cpLengths - skip;    % CP samples moved to the end by the shift.
+    before = max(skip);
+    numRows = before + Nfft + max(after);
+    starts = cumsum([0 cpLengths(1:end-1)+Nfft]);
+    Yt = zeros(numRows, numSymbols, size(waveform,2), 'like', waveform);
+    for n = 1:numSymbols
+        rows = before - skip(n) + (1:cpLengths(n)+Nfft);
+        Yt(rows,n,:) = waveform(starts(n)+(1:cpLengths(n)+Nfft),:);
+    end
+    k = (0:numSubcarriers-1).' - numSubcarriers/2; % Subcarrier offset from DC.
+    info.Nfft = Nfft;
+    info.CyclicPrefixLengths = cpLengths;
+    info.FFTRows = before + (1:Nfft);
+    info.ActiveBins = mod(k, Nfft) + 1;
+    info.PhaseCorrection = exp(2i*pi*k*after/Nfft);
+end
+
 function [grid, dataMask, pilotMask, bits, dataIndices, bitsPerSymbol] = ...
         makeGrid(carrier, cfg, stream)
     % Use standard uplink pilot positions and sequences from 5G Toolbox.
@@ -277,6 +320,16 @@ function checkSimulation(X, H, Y, meta, cfg)
     assert(numel(meta.Bits) == meta.BitsPerSymbol*numel(meta.DataIndices));
     expectedSymbols = nrSymbolModulate(meta.Bits, meta.Modulation);
     assert(max(abs(X(meta.DataIndices)-expectedSymbols)) < 1e-12);
+    % The time grid must reproduce Y through the documented FFT mapping.
+    g = meta.TimeGrid;
+    Fx = fft(meta.TimeDomainY(g.FFTRows,:,:));
+    timeError = norm(reshape(Fx(g.ActiveBins,:,:).*g.PhaseCorrection - Y,[],1)) / norm(Y(:));
+    assert(timeError < 1e-9, 'Time grid does not reproduce Y.');
+    % Noise must keep variance 10^(-SNRdB/10) per resource element after FFT.
+    if isfinite(cfg.SNRdB)
+        noiseRatio = mean(abs(meta.Noise(:)).^2) / meta.NoiseVariance;
+        assert(abs(noiseRatio-1) < 0.1, 'Noise scaling check failed.');
+    end
 
     % A separate static, noiseless run checks FFT scaling and timing alignment.
     staticCfg = cfg;
