@@ -1,12 +1,13 @@
-function [X, H, Y, meta] = mini_simo_tdl(cfg)
+function [X, H, Y, meta] = mini_simo_channel(cfg)
 %% Mini SIMO experiment: one transmitter and two receivers
 % Requires MATLAB and 5G Toolbox. Open this file and click Run.
 % Or call it with settings from simo_config:
 %   cfg = simo_config('SNRdB', 5, 'MaximumDopplerShift', 200);
-%   [X,H,Y,meta] = mini_simo_tdl(cfg);
+%   [X,H,Y,meta] = mini_simo_channel(cfg);
 % X(f,n)   : transmitted complex symbol (data, pilot, or zero).
 % H(f,n,r) : true channel response, NOT a pilot-based estimate.
-% Y(f,n,r) : received complex symbol, including noise.
+% Y(f,n,r) : received complex symbol, including noise (and interference
+%            when cfg.SIRdB is finite).
 % n = OFDM symbol (time), f = active subcarrier, r = receive antenna.
 % All grids use toolbox order: (frequency,time,antenna).
 % X has one transmit antenna; MATLAB omits its trailing singleton dimension.
@@ -15,7 +16,7 @@ function [X, H, Y, meta] = mini_simo_tdl(cfg)
 
 %% 1. Use default settings unless the caller supplies a configuration
 if nargin == 0
-    cfg = simo_config();
+    cfg = simo_config('DMRSAdditionalPosition', 0);
 else
     % Validate edits made directly to cfg fields as well as named overrides.
     names = fieldnames(cfg);
@@ -24,10 +25,10 @@ else
     cfg = simo_config(options{:});
 end
 
-assert(exist('nrTDLChannel','class') == 8, ...
+assert(exist('nrTDLChannel','class') == 8 && exist('nrCDLChannel','class') == 8, ...
     'This example requires MATLAB 5G Toolbox.');
 
-%% 2. Generate the transmitted grid and propagate it through TDL-C
+%% 2. Generate the transmitted grid and propagate it through the channel
 [X, H, Y, meta] = generateSlot(cfg);
 % meta contains the bits, data/pilot masks, noise, and noiseless reception.
 % A mask is a logical array: true marks a resource element of that type.
@@ -36,6 +37,11 @@ fprintf('X: %s, H: %s, Y: %s\n', ...
     mat2str(size(X)), mat2str(size(H)), mat2str(size(Y)));
 fprintf('Noise variance per complex resource element: %.4g\n', ...
     meta.NoiseVariance);
+fprintf('SIR: %g dB\n', meta.SIRdB);
+if ~strcmp(meta.PAModel,'none')
+    fprintf('PA: %s, %g dB back-off, gain %.4g\n', ...
+        meta.PAModel, meta.PABackoffdB, abs(meta.PAGain));
+end
 fprintf('Noiseless Y versus H.*X relative error: %.4g\n', ...
     meta.DiagonalModelError);
 end
@@ -47,7 +53,7 @@ if cfg.RunChecks
     checkSimulation(X, H, Y, meta, cfg);
 end
 if cfg.SaveData
-    outputFile = fullfile(fileparts(mfilename('fullpath')), 'mini_simo_tdl_data.mat');
+    outputFile = fullfile(fileparts(mfilename('fullpath')), 'mini_simo_channel_data.mat');
     save(outputFile, 'X', 'H', 'Y', 'cfg', 'meta');
     if cfg.Verbose, fprintf('Saved: %s\n', outputFile); end
 end
@@ -71,25 +77,17 @@ function [X, H, Y, meta] = generateSlot(cfg)
     ofdm = nrOFDMInfo(carrier, 'Nfft', cfg.Nfft);
 
     [X, dataMask, pilotMask, bits, dataIndices, bitsPerSymbol] = ...
-        makeGrid(carrier, cfg.Modulation, stream);
+        makeGrid(carrier, cfg, stream);
     numSymbols = size(X,2); % Columns are OFDM symbols (time).
 
-    channel = nrTDLChannel;
-    channel.DelayProfile = 'TDL-C';
-    channel.DelaySpread = cfg.DelaySpread;
-    channel.MaximumDopplerShift = cfg.MaximumDopplerShift;
-    channel.NumTransmitAntennas = 1;
-    channel.NumReceiveAntennas = cfg.NumReceiveAntennas;
-    channel.MIMOCorrelation = 'Low';
-    channel.NormalizePathGains = true;
-    channel.NormalizeChannelOutputs = false;
-    channel.SampleRate = ofdm.SampleRate;
-    channel.RandomStream = 'mt19937ar with seed';
-    channel.Seed = cfg.Seed;
+    channel = makeChannel(cfg, ofdm.SampleRate);
 
     % Turn subcarrier symbols into time samples using IFFT and cyclic prefix.
     % Disable transmit windowing to keep this introductory example simple.
     waveform = nrOFDMModulate(carrier, X, 'Windowing', 0, 'Nfft', cfg.Nfft);
+    % Optional PA nonlinearity. H below comes from the path gains, so it stays
+    % the linear channel; PA distortion appears in Y as an extra error term.
+    [waveform, paGain] = applyPA(waveform, cfg);
     channelInfo = info(channel);
     % Multipath/filtering delays the signal. Extra zeros flush the last symbol.
     padding = ceil(max(channelInfo.PathDelays)*ofdm.SampleRate) ...
@@ -109,6 +107,36 @@ function [X, H, Y, meta] = generateSlot(cfg)
     H = hGrid(:,1:numSymbols,:,1);
     noiselessY = rxGrid(:,1:numSymbols,:);
 
+    % Optional co-channel interferer: another PUSCH with its own bits, DMRS
+    % scrambling (cell ID 1), and fading. It shares the channel model, delay
+    % spread, and Doppler, and the receiver keeps the wanted user's timing.
+    % Its private stream leaves the wanted user's bits, fading, and noise
+    % identical to a slot without interference.
+    interference = zeros(size(noiselessY));
+    if isfinite(cfg.SIRdB)
+        interferenceStream = RandStream('mrg32k3a', 'Seed', cfg.Seed);
+        interfererCfg = cfg;
+        interfererCfg.Seed = randi(interferenceStream, [0 2^32-1]);
+        while interfererCfg.Seed == cfg.Seed
+            interfererCfg.Seed = randi(interferenceStream, [0 2^32-1]);
+        end
+        interfererCarrier = carrier;
+        interfererCarrier.NCellID = 1;
+        interfererX = makeGrid(interfererCarrier, interfererCfg, interferenceStream);
+        interfererChannel = makeChannel(interfererCfg, ofdm.SampleRate);
+        interfererWaveform = nrOFDMModulate(interfererCarrier, interfererX, ...
+            'Windowing', 0, 'Nfft', cfg.Nfft);
+        % The interferer is another UE with its own PA of the same model.
+        interfererWaveform = applyPA(interfererWaveform, cfg);
+        interfererRx = interfererChannel([interfererWaveform; zeros(padding,1)]);
+        release(interfererChannel);
+        interfererGrid = nrOFDMDemodulate(interfererCarrier, ...
+            interfererRx(1+offset:end,:), 'Nfft', cfg.Nfft);
+        % Both users have unit symbol power and normalized channels, so this
+        % scaling sets the average interference power per occupied RE.
+        interference = sqrt(10^(-cfg.SIRdB/10)) * interfererGrid(:,1:numSymbols,:);
+    end
+
     % 5G QPSK/16QAM have unit AVERAGE symbol power (16QAM scaled by 1/sqrt(10))
     % and the average channel power is normalized.
     % SNR is Es/N0 per occupied resource element, per receive branch, averaged
@@ -116,10 +144,11 @@ function [X, H, Y, meta] = generateSlot(cfg)
     % nor the full-band SNR convention in the paper.
     % Add circular complex Gaussian noise after FFT: this is equivalent to
     % white receiver noise on these FFT bins and makes its variance explicit.
+    % SIR uses the same per-RE reference as SNR.
     noiseVariance = 10^(-cfg.SNRdB/10);
     noise = sqrt(noiseVariance/2) * ...
         (randn(stream,size(H)) + 1i*randn(stream,size(H)));
-    Y = noiselessY + noise;
+    Y = noiselessY + interference + noise;
 
     meta.DataMask = dataMask;
     meta.PilotMask = pilotMask;
@@ -127,10 +156,17 @@ function [X, H, Y, meta] = generateSlot(cfg)
     % With Q = meta.BitsPerSymbol, bits(Q*(k-1)+(1:Q)) label X(meta.DataIndices(k)).
     meta.DataIndices = dataIndices;
     meta.Modulation = cfg.Modulation;
+    meta.ChannelModel = cfg.ChannelModel;
+    meta.PilotSymbols = find(any(pilotMask,1)); % MATLAB columns with pilots.
     meta.BitsPerSymbol = bitsPerSymbol;
     meta.NoiseVariance = noiseVariance;
     meta.Noise = noise;
-    meta.NoiselessY = noiselessY;
+    meta.SIRdB = cfg.SIRdB;
+    meta.Interference = interference; % Zero when SIRdB is Inf.
+    meta.NoiselessY = noiselessY;     % Wanted user only: no interference.
+    meta.PAModel = cfg.PAModel;
+    meta.PABackoffdB = cfg.PABackoffdB;
+    meta.PAGain = paGain;             % Bussgang gain; 1 when PAModel is 'none'.
     meta.TimingOffsetSamples = offset;
     meta.SampleRate = ofdm.SampleRate;
     meta.PathDelaysSeconds = channelInfo.PathDelays;
@@ -140,22 +176,83 @@ function [X, H, Y, meta] = generateSlot(cfg)
     release(channel);
 end
 
+function channel = makeChannel(cfg, sampleRate)
+    % TDL: tapped delay line, antennas set by count and correlation.
+    % CDL: clustered paths with angles, antennas set by array geometry.
+    if startsWith(cfg.ChannelModel,'TDL')
+        channel = nrTDLChannel;
+        channel.NumTransmitAntennas = 1;
+        channel.NumReceiveAntennas = cfg.NumReceiveAntennas;
+        channel.MIMOCorrelation = 'Low';
+    else
+        channel = nrCDLChannel;
+        channel.CarrierFrequency = cfg.CarrierFrequency;
+        % Array size is [rows columns polarizations panelRows panelColumns].
+        % Isotropic elements keep average channel power at one, as for TDL,
+        % so SNRdB keeps the same meaning across all ten models.
+        channel.TransmitAntennaArray.Size = [1 1 1 1 1];
+        channel.TransmitAntennaArray.Element = 'isotropic';
+        channel.ReceiveAntennaArray.Size = [1 cfg.NumReceiveAntennas 1 1 1];
+        channel.ReceiveAntennaArray.Element = 'isotropic';
+    end
+    channel.DelayProfile = cfg.ChannelModel;
+    channel.DelaySpread = cfg.DelaySpread;
+    channel.MaximumDopplerShift = cfg.MaximumDopplerShift;
+    channel.NormalizePathGains = true;
+    channel.NormalizeChannelOutputs = false;
+    channel.SampleRate = sampleRate;
+    channel.RandomStream = 'mt19937ar with seed';
+    channel.Seed = cfg.Seed;
+end
+
+function [y, gain] = applyPA(x, cfg)
+    % Memoryless PA on the time waveform. The input is scaled so its RMS sits
+    % PABackoffdB below the saturation amplitude (1). The output is scaled back
+    % to the input RMS, so SNRdB keeps its meaning and only distortion is added.
+    gain = 1;
+    if strcmp(cfg.PAModel,'none')
+        y = x;
+        return
+    end
+    rmsIn = sqrt(mean(abs(x).^2));
+    u = x/rmsIn * 10^(-cfg.PABackoffdB/20);
+    switch cfg.PAModel
+        case 'rapp'
+            p = cfg.RappSmoothness;
+            v = u ./ (1 + abs(u).^(2*p)).^(1/(2*p));
+        case 'polynomial'
+            % Hold |u| at saturation so a falling AM/AM curve cannot fold back.
+            u = min(abs(u),1) .* exp(1i*angle(u));
+            a = cfg.PACoefficients;
+            v = zeros(size(u));
+            for k = 1:numel(a)
+                v = v + a(k)*u.*abs(u).^(2*k-2);
+            end
+    end
+    y = v * (rmsIn/sqrt(mean(abs(v).^2)));
+    % Bussgang gain: y = gain*x + distortion uncorrelated with x.
+    gain = (x'*y)/(x'*x);
+end
+
 function [grid, dataMask, pilotMask, bits, dataIndices, bitsPerSymbol] = ...
-        makeGrid(carrier, modulation, stream)
+        makeGrid(carrier, cfg, stream)
     % Use standard uplink pilot positions and sequences from 5G Toolbox.
     pusch = nrPUSCHConfig;
     pusch.PRBSet = 0:carrier.NSizeGrid-1; % Toolbox PRB numbers start at zero.
     pusch.SymbolAllocation = [0 14];    % Start at symbol 0; use 14 symbols.
     pusch.MappingType = 'A';
     pusch.NumLayers = 1;
+    modulation = cfg.Modulation;
     pusch.Modulation = modulation;
     pusch.TransformPrecoding = false;
     pusch.EnablePTRS = false;
-    pusch.DMRS.DMRSTypeAPosition = 2;    % Symbol 2 means MATLAB column 3.
-    pusch.DMRS.DMRSLength = 1;
-    pusch.DMRS.DMRSAdditionalPosition = 0; % One pilot-bearing symbol.
-    pusch.DMRS.DMRSConfigurationType = 1;
-    pusch.DMRS.NumCDMGroupsWithoutData = 1;
+    pusch.DMRS.DMRSTypeAPosition = cfg.DMRSTypeAPosition; % 2 means MATLAB column 3.
+    pusch.DMRS.DMRSLength = cfg.DMRSLength;
+    pusch.DMRS.DMRSAdditionalPosition = cfg.DMRSAdditionalPosition; % Extra pilot symbols.
+    pusch.DMRS.DMRSConfigurationType = cfg.DMRSConfigurationType;
+    pusch.DMRS.NumCDMGroupsWithoutData = cfg.NumCDMGroupsWithoutData;
+    % Unused CDM groups stay empty. Their 3 dB DMRS power boost is not applied:
+    % pilots keep unit magnitude, which the LS receiver relies on.
     dataIndices = nrPUSCHIndices(carrier, pusch);
     pilotIndices = nrPUSCHDMRSIndices(carrier, pusch);
     pilots = nrPUSCHDMRS(carrier, pusch);
@@ -185,6 +282,11 @@ function checkSimulation(X, H, Y, meta, cfg)
     staticCfg = cfg;
     staticCfg.MaximumDopplerShift = 0;
     staticCfg.SNRdB = Inf;
+    staticCfg.SIRdB = Inf;
+    staticCfg.PAModel = 'none'; % PA distortion is real, not a scaling bug.
+    % Long-delay models (A, D, E at 300 ns) put paths near or beyond the
+    % cyclic prefix; that real inter-symbol interference is not a scaling bug.
+    staticCfg.DelaySpread = min(cfg.DelaySpread, 30e-9);
     [~,~,~,staticMeta] = generateSlot(staticCfg);
     assert(staticMeta.DiagonalModelError < 1e-3, ...
         'Static channel check failed: check timing, CP length, and scaling.');
@@ -193,7 +295,7 @@ function checkSimulation(X, H, Y, meta, cfg)
 end
 
 function plotExample(X, H, meta)
-    figure('Name','Mini SIMO TDL-C');
+    figure('Name',['Mini SIMO ' meta.ChannelModel]);
     subplot(1,3,1);
     % imagesc places columns (OFDM symbols) on the horizontal axis.
     gridTypes = double(meta.DataMask)+2*double(meta.PilotMask);

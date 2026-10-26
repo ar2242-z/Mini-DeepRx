@@ -1,6 +1,6 @@
 function [results, sigma2Hat] = decode_simo_ls(data)
-%% SIMO receiver: known H versus LS H from one pilot-bearing OFDM symbol
-% First run mini_simo_tdl.m, then run this file.
+%% SIMO receiver: known H versus LS H from the pilot-bearing OFDM symbols
+% First run mini_simo_channel.m, then run this file.
 % With no input: load the saved slot, report, check, save, and plot.
 % With a data structure containing X,H,Y,meta: return results quietly.
 % The sweep uses this second form to reuse exactly the same receiver.
@@ -13,15 +13,15 @@ function [results, sigma2Hat] = decode_simo_ls(data)
 folder = fileparts(mfilename('fullpath'));
 interactive = nargin == 0;
 if interactive
-inputFile = fullfile(folder, 'mini_simo_tdl_data.mat');
-assert(isfile(inputFile), 'Run mini_simo_tdl.m first to generate the data.');
+inputFile = fullfile(folder, 'mini_simo_channel_data.mat');
+assert(isfile(inputFile), 'Run mini_simo_channel.m first to generate the data.');
 data = load(inputFile, 'X', 'Y', 'H', 'meta');
 end
 Y = data.Y;
 pilotMask = data.meta.PilotMask;
 dataIndices = data.meta.DataIndices;
 assert(isfield(data.meta,'Modulation'), ...
-    'Saved slot predates the Modulation setting; rerun mini_simo_tdl.');
+    'Saved slot predates the Modulation setting; rerun mini_simo_channel.');
 modulation = data.meta.Modulation;
 % In a real receiver, pilots are generated from the known configuration.
 % Here copy ONLY known pilot symbols; unknown data symbols stay zero.
@@ -39,7 +39,7 @@ fprintf('Pilots per antenna: %d\n', numel(pilotInfo.Subcarriers));
 fprintf('Estimated sigma^2: %.6g; estimated sigma: %.6g\n', sigma2Hat, sigmaHat);
 end
 
-%% 3. Equalize with known H and with the one-pilot LS estimate
+%% 3. Equalize with known H and with the pilot-based LS estimate
 % Both branches use the SAME pilot-only noise estimate. Neither reads the
 % simulator noise variance, actual noise samples, SNR, or noiseless Y.
 XhatKnown = equalizeSIMO(Y, data.H, sigma2Hat);
@@ -54,7 +54,7 @@ errorsKnown = nnz(bitsKnown ~= referenceBits);
 errorsLS = nnz(bitsLS ~= referenceBits);
 berKnown = errorsKnown / numBits;
 berLS = errorsLS / numBits;
-results = table({'Known H'; 'LS H, one pilot symbol'}, ...
+results = table({'Known H'; 'LS H'}, ...
     [errorsKnown; errorsLS], [numBits; numBits], [berKnown; berLS], ...
     'VariableNames', {'Receiver','BitErrors','TotalBits','BER'});
 if interactive
@@ -78,38 +78,64 @@ end
 %% Local helper functions
 function [Hls, sigma2Hat, details] = estimateFromPilots(Y, pilots, mask)
     pilotSymbols = find(any(mask,1));
-    assert(isscalar(pilotSymbols), ...
-        'This introductory receiver expects one pilot-bearing OFDM symbol.');
-    n = pilotSymbols(1);
-    f = find(mask(:,n));
-    assert(numel(f)>=3 && all(diff(f)==f(2)-f(1)), ...
-        'Noise estimation requires at least three equally spaced pilots.');
-    xp = pilots(f,n);
-    assert(all(abs(abs(xp)-1)<1e-10), 'This example expects unit-power pilots.');
-    Nr = size(Y,3);
-    hp = zeros(numel(f),Nr);
+    assert(~isempty(pilotSymbols), 'The grid contains no pilots.');
+    [F,N,Nr] = size(Y);
+    Hsym = zeros(F,numel(pilotSymbols),Nr); % LS estimate on each pilot symbol.
+    d = [];
+    for k = 1:numel(pilotSymbols)
+        n = pilotSymbols(k);
+        f = find(mask(:,n));
+        xp = pilots(f,n);
+        assert(all(abs(abs(xp)-1)<1e-10), 'This example expects unit-power pilots.');
+        % Type 1 pilots are equally spaced. Type 2 pilots come in adjacent
+        % pairs; every second pilot is then equally spaced again.
+        stride = pilotStride(f);
+        for r = 1:Nr
+            % Eq. (2): unit-power pilots give H_LS = Y*conj(X) = Y/X.
+            hp = Y(f,n,r).*conj(xp);
+            % Linear interpolation across frequency; extrapolate the edge bins.
+            Hsym(:,k,r) = interp1(f, hp, (1:F).', 'linear', 'extrap');
+            % A raw LS residual Y-H_LS*X is zero, so it cannot estimate noise.
+            % Instead, cancel a locally linear channel with a second difference
+            % over equally spaced pilots: d(k) = hp(k-1) - 2*hp(k) + hp(k+1).
+            for o = 1:stride
+                d = [d; diff(hp(o:stride:end),2)]; %#ok<AGROW>
+            end
+        end
+    end
+    assert(~isempty(d), 'Noise estimation requires at least three equally spaced pilots.');
+    % Interpolate linearly in time between pilot symbols. Before the first and
+    % after the last pilot symbol, hold the nearest estimate constant.
     Hls = zeros(size(Y));
     for r = 1:Nr
-        % Eq. (2): unit-power pilots give H_LS = Y*conj(X) = Y/X.
-        hp(:,r) = Y(f,n,r).*conj(xp);
-        % Linear interpolation across frequency; extrapolate the edge bin.
-        hFrequency = interp1(f, hp(:,r), (1:size(Y,1)).', 'linear', 'extrap');
-        % Only one time observation: hold the estimate constant across time.
-        Hls(:,:,r) = repmat(hFrequency, 1, size(Y,2));
+        if isscalar(pilotSymbols)
+            Hls(:,:,r) = repmat(Hsym(:,1,r), 1, N);
+        else
+            t = min(max(1:N, pilotSymbols(1)), pilotSymbols(end));
+            Hls(:,:,r) = interp1(pilotSymbols, Hsym(:,:,r).', t, 'linear').';
+        end
     end
 
-    % A raw LS residual Y-H_LS*X is zero, so it cannot estimate noise.
-    % Instead, cancel a locally linear channel with a second difference:
-    % d(k) = hp(k-1) - 2*hp(k) + hp(k+1).
     % Independent pilot noise gives E|d|^2 = (1+4+1)*sigma^2 = 6*sigma^2.
-    % Average over pilot triples and antennas, assuming equal noise power.
-    % This is our estimator choice; the paper does not specify this formula.
-    % Channel curvature and ICI can bias it; it is not exact noise recovery.
-    d = diff(hp,2,1);
-    sigma2Hat = mean(abs(d(:)).^2)/6;
-    details.Symbol = n;
-    details.Subcarriers = f;
-    details.RawChannelEstimates = hp;
+    % Average over pilot triples, pilot symbols, and antennas, assuming equal
+    % noise power. This is our estimator choice; the paper does not specify
+    % this formula. Channel curvature and ICI can bias it; it is not exact
+    % noise recovery.
+    sigma2Hat = mean(abs(d).^2)/6;
+    details.Symbol = pilotSymbols;
+    details.Subcarriers = find(mask(:,pilotSymbols(1)));
+end
+
+function stride = pilotStride(f)
+    % Smallest s such that f(o:s:end) is equally spaced for every offset o.
+    for stride = 1:numel(f)
+        uniform = true;
+        for o = 1:stride
+            spacing = diff(f(o:stride:end));
+            uniform = uniform && all(spacing==spacing(1:min(1,end)));
+        end
+        if uniform, return; end
+    end
 end
 
 function Xhat = equalizeSIMO(Y, H, sigma2Hat)
@@ -162,6 +188,17 @@ function checkReceiver(modulation)
     y = sqrt(0.04/2)*(randn(stream,72,14,1000)+1i*randn(stream,72,14,1000));
     [~,nvar] = estimateFromPilots(y,pilots,mask);
     assert(abs(nvar/0.04-1)<0.05, 'Noise-power normalization check failed.');
+    % Two pilot symbols with type 2 spacing (adjacent pairs every 6
+    % subcarriers): a channel linear in frequency AND time is exact between
+    % the pilot symbols, and the pair spacing must not bias the noise estimate.
+    mask = false(72,14); mask(sort([1:6:72 2:6:72]),[3 12]) = true;
+    pilots = double(mask);
+    linearH = repmat(1+0.01*f+1i*0.02*f,1,14,2) + 0.05*(1:14);
+    estimate = estimateFromPilots(linearH.*pilots,pilots,mask);
+    inside = estimate(:,3:12,:)-linearH(:,3:12,:);
+    assert(max(abs(inside(:)))<1e-12, 'Time interpolation check failed.');
+    [~,nvar] = estimateFromPilots(y,pilots,mask);
+    assert(abs(nvar/0.04-1)<0.05, 'Type 2 noise-power check failed.');
     fprintf('Receiver checks passed.\n');
 end
 
@@ -183,7 +220,7 @@ function plotReceiver(H, Hls, knownSymbols, lsSymbols, bers, errors, numBits, mo
     end
     figure('Name','Receiver comparison');
     symbols = {knownSymbols,lsSymbols};
-    names = {'Known H','LS H: one pilot symbol'};
+    names = {'Known H','LS H'};
     q = 2*(1+strcmp(modulation,'16QAM'));
     ideal = nrSymbolModulate(double(reshape(dec2bin(0:2^q-1,q).'=='1',[],1)),modulation);
     limit = 1.1*max([abs(real([knownSymbols;lsSymbols])); ...

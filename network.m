@@ -4,6 +4,10 @@ function [net, history] = network(varargin)
 % Five master seeds control independent streams of NEW simulation seeds.
 % Change the number of master seeds by changing the list:
 %   network('TrainingSeeds',42:51,'MaxEpochs',30)
+% Mix channel models, delay spreads, and pilot layouts; each slot draws one:
+%   network('ChannelModels',{'CDL-A','CDL-B','CDL-C','CDL-D','CDL-E'}, ...
+%       'DelaySpreadRange',[10e-9 300e-9],'SIRRange',[0 36], ...
+%       'PilotConfigs',struct('DMRSAdditionalPosition',{0,1}))
 % Prepare inputs without Deep Learning Toolbox:
 %   network('PrepareOnly',true)
 % deeprx_sample.m packs inputs identically for training and testing.
@@ -19,9 +23,19 @@ addParameter(p,'TrainingSeeds',42:46,seedList);       % FIVE master seeds.
 addParameter(p,'ValidationSeeds',1001:1002,seedList); % Never used for gradients.
 addParameter(p,'SamplesPerSeed',200,positiveInteger); % Fresh slots per master seed PER EPOCH.
 addParameter(p,'ValidationSamplesPerSeed',50,positiveInteger); % Fixed held-out slots.
-addParameter(p,'SNRValues',0:5:20,@(x) isnumeric(x) && isvector(x) && ~isempty(x) && isreal(x) && all(isfinite(x)));
-addParameter(p,'DopplerValues',0:100:500,@(x) isnumeric(x) && isvector(x) && ~isempty(x) && isreal(x) && all(isfinite(x) & x>=0));
-addParameter(p,'MaxEpochs',200,positiveInteger);       % Passes over the dataset.
+% Each slot draws SNR, maximum Doppler shift, SIR, and delay spread
+% independently and uniformly from these [min max] ranges (SNR and SIR in dB).
+% Use equal limits for a fixed value, e.g. 'SIRRange',[Inf Inf] for no interferer.
+rangeCheck = @(x) isnumeric(x) && numel(x)==2 && isreal(x) && all(isfinite(x)) && x(1)<=x(2);
+addParameter(p,'SNRRange',[-4 32],rangeCheck);
+addParameter(p,'DopplerRange',[0 500],@(x) rangeCheck(x) && all(x>=0));
+addParameter(p,'SIRRange',[0 36],@(x) isequal(x,[Inf Inf]) || rangeCheck(x));
+% Each slot also draws one model and one pilot configuration.
+% Missing pilot fields keep their simo_config default.
+addParameter(p,'ChannelModels',{'TDL-C'},@(x) (iscellstr(x) || isstring(x)) && ~isempty(x));
+addParameter(p,'DelaySpreadRange',[10e-9 300e-9],@(x) rangeCheck(x) && all(x>0));
+addParameter(p,'PilotConfigs',struct('DMRSAdditionalPosition',0),@(x) isstruct(x) && ~isempty(x));
+addParameter(p,'MaxEpochs',150,positiveInteger);       % Passes over the dataset.
 addParameter(p,'MiniBatchSize',4,positiveInteger);    % Slots per gradient update.
 addParameter(p,'LearningRate',1e-3,@(x) isnumeric(x) && isscalar(x) && isreal(x) && isfinite(x) && x>0);
 addParameter(p,'InitializationSeed',7,@(x) seedList(x) && isscalar(x));
@@ -29,6 +43,8 @@ addParameter(p,'ExecutionEnvironment','auto',@(x) any(strcmp(x,{'auto','cpu','gp
 addParameter(p,'PrepareOnly',false,@(x) islogical(x) && isscalar(x));
 addParameter(p,'ShowPlots',true,@(x) islogical(x) && isscalar(x));
 parse(p,varargin{:}); training = p.Results;
+training.ChannelModels = cellstr(training.ChannelModels);
+training.PilotConfigs = training.PilotConfigs(:);
 assert(numel(unique(training.TrainingSeeds))==numel(training.TrainingSeeds), ...
     'TrainingSeeds must not contain duplicates.');
 assert(numel(unique(training.ValidationSeeds))==numel(training.ValidationSeeds), ...
@@ -44,6 +60,13 @@ end
 folder = fileparts(mfilename('fullpath'));
 baseCfg = simo_config('SNRdB',20,'MaximumDopplerShift',100, ...
     'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false);
+% Reject invalid models or pilot settings now, not mid-training.
+for k = 1:numel(training.ChannelModels)
+    simo_config('ChannelModel',training.ChannelModels{k});
+end
+for k = 1:numel(training.PilotConfigs)
+    validated = slot_config(baseCfg,training.PilotConfigs(k)); %#ok<NASGU>
+end
 
 %% 2. Plan independent slots, then prepare the first epoch and validation set
 % Do not reset the generator to the same five seeds for every condition:
@@ -52,15 +75,14 @@ baseCfg = simo_config('SNRdB',20,'MaximumDopplerShift',100, ...
 % seeds. Each slot and each epoch now has fresh bits, fading, and noise.
 % Defaults: 500 slots/epoch * 20 epochs = 10000 distinct training slots.
 roots = [training.TrainingSeeds(:);training.ValidationSeeds(:)];
-trainingPlan = makePlan(training.TrainingSeeds,training.SNRValues, ...
-    training.DopplerValues,training.SamplesPerSeed,training.MaxEpochs,roots);
-validationSamples = makePlan(training.ValidationSeeds,training.SNRValues, ...
-    training.DopplerValues,training.ValidationSamplesPerSeed,1, ...
-    [roots;trainingPlan.Seed]);
+trainingPlan = makePlan(training.TrainingSeeds,training,training.SamplesPerSeed, ...
+    training.MaxEpochs,roots);
+validationSamples = makePlan(training.ValidationSeeds,training, ...
+    training.ValidationSamplesPerSeed,1,[roots;trainingPlan.Seed]);
 assert(isempty(intersect(trainingPlan.Seed,validationSamples.Seed)));
 trainingSamples = trainingPlan(trainingPlan.Epoch==1,:);
-[Z,bitLabels,bitMask] = makeDataset(baseCfg,trainingSamples);
-[validationZ,validationLabels,validationMask] = makeDataset(baseCfg,validationSamples);
+[Z,bitLabels,bitMask] = makeDataset(baseCfg,training,trainingSamples);
+[validationZ,validationLabels,validationMask] = makeDataset(baseCfg,training,validationSamples);
 % Z dimensions: frequency x time x features x samples (312 x 14 x 10 x 500).
 % Labels/masks: frequency x time x bits per symbol x samples (4 for 16QAM).
 % network_data.mat stores the FIRST epoch; trainingPlan records every epoch.    
@@ -95,7 +117,7 @@ averageGradient = []; averageSquaredGradient = []; iteration = 0;
 bestLoss = Inf;
 for epoch = 1:training.MaxEpochs
     if epoch>1
-        [Z,bitLabels,bitMask] = makeDataset(baseCfg,trainingPlan(trainingPlan.Epoch==epoch,:));
+        [Z,bitLabels,bitMask] = makeDataset(baseCfg,training,trainingPlan(trainingPlan.Epoch==epoch,:));
     end
     order = randperm(size(Z,4));
     totalLoss = 0; totalBits = 0;
@@ -158,37 +180,54 @@ end
 end
 
 %% Local helpers
-function samples = makePlan(roots,snrs,dopplers,slotsPerRoot,epochs,excluded)
+function samples = makePlan(roots,training,slotsPerRoot,epochs,excluded)
     % Choose unique generator seeds; validation excludes every training seed.
+    uniform = @(stream,range) range(1)+diff(range)*rand(stream);
     count = numel(roots)*slotsPerRoot*epochs;
-    settings = zeros(count,5); used = excluded(:); k = 0;
+    settings = zeros(count,9); used = excluded(:); k = 0;
     for root = roots(:).'
         stream = RandStream('mt19937ar','Seed',root);
+        % A second, independent stream draws channel and pilot settings, so
+        % the seed sequence matches plans made before these options existed.
+        conditionStream = RandStream('mrg32k3a','Seed',root);
         for epoch = 1:epochs
             for slot = 1:slotsPerRoot
                 seed = randi(stream,[0 2^32-1]);
                 while ismember(seed,used), seed = randi(stream,[0 2^32-1]); end
                 used(end+1,1) = seed; %#ok<AGROW>
-                % Cycle through conditions, but use a NEW seed for each slot.
-                condition = mod((epoch-1)*slotsPerRoot+slot-1,numel(snrs)*numel(dopplers))+1;
-                [i,j] = ind2sub([numel(snrs),numel(dopplers)],condition);
-                k = k+1; settings(k,:) = [epoch,root,seed,snrs(i),dopplers(j)];
+                % Draw fresh conditions and a NEW seed for each slot.
+                model = randi(conditionStream,numel(training.ChannelModels));
+                pilot = randi(conditionStream,numel(training.PilotConfigs));
+                delaySpread = uniform(conditionStream,training.DelaySpreadRange);
+                snr = uniform(conditionStream,training.SNRRange);
+                doppler = uniform(conditionStream,training.DopplerRange);
+                if isequal(training.SIRRange,[Inf Inf]), sir = Inf;
+                else, sir = uniform(conditionStream,training.SIRRange); end
+                k = k+1; settings(k,:) = [epoch,root,seed,snr,doppler, ...
+                    model,delaySpread,pilot,sir];
             end
         end
     end
-    samples = array2table(settings,'VariableNames',{'Epoch','MasterSeed','Seed','SNRdB','DopplerHz'});
+    samples = array2table(settings,'VariableNames',{'Epoch','MasterSeed','Seed', ...
+        'SNRdB','DopplerHz','ChannelIndex','DelaySpread','PilotIndex','SIRdB'});
+    models = string(training.ChannelModels(samples.ChannelIndex));
+    samples.ChannelModel = models(:);
 end
 
-function [Z,labels,mask] = makeDataset(baseCfg,samples)
+function [Z,labels,mask] = makeDataset(baseCfg,training,samples)
     count = height(samples);
     F = 12*baseCfg.NumResourceBlocks; N = 14;
     q = 2*(1+strcmp(baseCfg.Modulation,'16QAM')); % Bits per symbol.
     Z = zeros(F,N,4*baseCfg.NumReceiveAntennas+2,count,'single');
     labels = zeros(F,N,q,count,'single'); mask = false(F,N,q,count);
     for k = 1:count
-        cfg = baseCfg; cfg.Seed = samples.Seed(k);
+        cfg = slot_config(baseCfg,training.PilotConfigs(samples.PilotIndex(k)));
+        cfg.Seed = samples.Seed(k);
         cfg.SNRdB = samples.SNRdB(k); cfg.MaximumDopplerShift = samples.DopplerHz(k);
-        [X,~,Y,meta] = mini_simo_tdl(cfg);
+        cfg.ChannelModel = char(samples.ChannelModel(k));
+        cfg.DelaySpread = samples.DelaySpread(k);
+        cfg.SIRdB = samples.SIRdB(k);
+        [X,~,Y,meta] = mini_simo_channel(cfg);
         [Z(:,:,:,k),labels(:,:,:,k),mask(:,:,:,k)] = deeprx_sample(Y,X,meta);
     end
 end

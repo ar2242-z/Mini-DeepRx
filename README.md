@@ -1,14 +1,14 @@
 # Mini DeepRx simulation in MATLAB
 
-A SIMO OFDM experiment with one transmit antenna, two receive antennas, a TDL-C channel, 16QAM data (QPSK selectable), and one pilot-bearing OFDM symbol. It compares a known-channel receiver, an LS-based receiver, and a small DeepRx-style CNN. BER is uncoded; LDPC is not implemented.
+A SIMO OFDM experiment with one transmit antenna, two receive antennas, a 3GPP TDL or CDL channel (A–E, TDL-C by default), 16QAM data (QPSK selectable), and configurable 5G DMRS pilots (one pilot-bearing OFDM symbol by default). It compares a known-channel receiver, an LS-based receiver, and a small DeepRx-style CNN. BER is uncoded; LDPC is not implemented.
 
 Run commands from this folder in MATLAB. Signal generation needs 5G Toolbox; CNN training and inference also need Deep Learning Toolbox. GPU execution uses Parallel Computing Toolbox when available.
 
 | MATLAB file | Purpose | How to use it |
 |---|---|---|
 | `simo_config.m` | Creates and validates simulation settings: PRBs, subcarrier spacing, SNR, Doppler, antennas, delay spread, and random seed. | `cfg = simo_config('SNRdB',10);` |
-| `mini_simo_tdl.m` | Generates data and pilots, OFDM-modulates them, applies TDL-C, demodulates, and adds noise. Returns `X`, true `H`, received `Y`, and supporting information in `meta`. Includes checks and channel/grid plots. | `[X,H,Y,meta] = mini_simo_tdl(cfg);` |
-| `decode_simo_ls.m` | Compares known H against LS estimation from one pilot-bearing symbol. Estimates noise power from pilots, performs LMMSE antenna combining/equalization (bias-removed for 16QAM amplitude decisions), hard-demaps 16QAM, and calculates BER. Plots channels, constellations, and BER when run without inputs. | `decode_simo_ls;` after generating a saved slot. |
+| `mini_simo_channel.m` | Generates data and pilots, OFDM-modulates them, applies the selected TDL/CDL channel, demodulates, and adds noise. Returns `X`, true `H`, received `Y`, and supporting information in `meta`. Includes checks and channel/grid plots. | `[X,H,Y,meta] = mini_simo_channel(cfg);` |
+| `decode_simo_ls.m` | Compares known H against LS estimation from the pilots (linear in frequency, then linear in time between pilot symbols). Estimates noise power from pilots, performs LMMSE antenna combining/equalization (bias-removed for 16QAM amplitude decisions), hard-demaps 16QAM, and calculates BER. Plots channels, constellations, and BER when run without inputs. | `decode_simo_ls;` after generating a saved slot. |
 | `sweep.m` | Generates independent trials and plots known-H and LS BER versus SNR and Doppler. Uses 100 trials per point by default. | `sweep;` |
 | `deeprx_sample.m` | Shared helper that assembles real-valued CNN input `Z`, target bit grids, and the mask excluding pilots from the loss. Used by both training and testing. | Normally called automatically. |
 | `network.m` | Generates training/validation data, builds the 11-block residual CNN from the paper's Table I, trains with masked binary cross-entropy and Adam, saves the best validation checkpoint, and plots training history. | `network;` |
@@ -19,7 +19,7 @@ Run commands from this folder in MATLAB. Signal generation needs 5G Toolbox; CNN
 ```matlab
 % Generate one slot and inspect the conventional receivers.
 cfg = simo_config();
-[X,H,Y,meta] = mini_simo_tdl(cfg);
+[X,H,Y,meta] = mini_simo_channel(cfg);
 decode_simo_ls;
 
 % Conventional receiver sweeps; generates its own slots.
@@ -52,12 +52,34 @@ Change defaults in `simo_config.m`, or override settings for a single generation
 ```matlab
 cfg = simo_config('NumResourceBlocks',12,'SubcarrierSpacing',30, ...
     'SNRdB',10,'MaximumDopplerShift',200,'Seed',123);
-[X,H,Y,meta] = mini_simo_tdl(cfg);
+[X,H,Y,meta] = mini_simo_channel(cfg);
 ```
 
 `Nfft` must exceed `12 * NumResourceBlocks`. A local `cfg` override does not change settings inside `network` or `sweep`; those functions create their own configuration. Change shared defaults before retraining if you want a different grid. `test_network` uses the configuration saved with the model.
 
 Some older comments and saved results refer to the earlier 6-PRB, 72-subcarrier experiment. Regenerate data and retrain after changing the grid, waveform, or modulation settings; slots and models saved before the `Modulation` setting existed (QPSK) are rejected. Use `simo_config('Modulation','QPSK')` for the old behaviour.
+
+**Channel models and pilots**
+
+`simo_config` selects the channel with `ChannelModel` (`'TDL-A'`…`'TDL-E'`, `'CDL-A'`…`'CDL-E'`; D and E include line of sight). CDL uses one isotropic transmit element, a 1×`NumReceiveAntennas` isotropic receive array, and `CarrierFrequency` (3.5 GHz). Pilots follow 5G PUSCH DMRS: `DMRSTypeAPosition` (2 or 3), `DMRSLength` (1 or 2), `DMRSAdditionalPosition` (0–3 extra pilot symbols), `DMRSConfigurationType` (1: every 2nd subcarrier; 2: pairs every 6), and `NumCDMGroupsWithoutData`.
+
+```matlab
+cfg = simo_config('ChannelModel','CDL-D','DMRSAdditionalPosition',1); % pilots on symbols 3 and 12
+[X,H,Y,meta] = mini_simo_channel(cfg);
+```
+
+Training can mix conditions; each slot draws one model and one pilot configuration, plus SNR, maximum Doppler shift, SIR, and RMS delay spread, each independently uniform over `SNRRange` (default −4 to 32 dB), `DopplerRange` (0–500 Hz), `SIRRange` (0–36 dB), and `DelaySpreadRange` (10–300 ns). SIR adds one co-channel PUSCH interferer (`simo_config` `SIRdB`, default `Inf` = none) with its own bits, DMRS scrambling, and fading; `'SIRRange',[Inf Inf]` trains without it. Testing defaults to the trained conditions (without interference) and accepts unseen ones:
+
+```matlab
+network('ChannelModels',{'CDL-A','CDL-B','CDL-C','CDL-D','CDL-E'}, ...
+    'DelaySpreadRange',[10e-9 300e-9], ...
+    'PilotConfigs',struct('DMRSAdditionalPosition',{0,1}));
+test_network('ChannelModels',{'TDL-A','TDL-E'}, ...
+    'PilotConfigs',struct('DMRSAdditionalPosition',{0,1}));
+test_network('SIRValues',0:6:36); % Adds an SIR sweep at 20 dB and 100 Hz.
+```
+
+`sweep.m` has `channelModels` and `pilotConfigs` lists at the top. Results tables gain `ChannelModel` and `Pilots` columns, and plots show one tile per combination.
 
 **Training and sweep controls**
 
@@ -74,7 +96,7 @@ Edit `snrValues`, `dopplerValues`, `numTrials`, and `baseCfg` at the top of `swe
 
 | Output | Contents |
 |---|---|
-| `mini_simo_tdl_data.mat` | One generated slot and its configuration. |
+| `mini_simo_channel_data.mat` | One generated slot and its configuration. |
 | `decode_simo_ls_results.mat` | LS channel estimate, estimated noise power, equalized symbols, detected bits, and BER. |
 | `sweep_results.mat`, `sweep_*.png` | Conventional BER sweeps and plots. |
 | `network_data.mat` | First-epoch inputs/labels/masks, fixed validation data, and the seed plan for all epochs. |
