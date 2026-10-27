@@ -108,7 +108,8 @@ passed = report(err < 1e-3 && abs(rH.UncodedErrors-rF.UncodedErrors) <= 2, sprin
 % A one-epoch hybrid run from a saved FCNN with the FCNN frozen.
 saved = fullfile(root,'models','test_tcnn_init.mat');
 model = fcnnModel; save(saved,'model');
-cleanup = onCleanup(@() deleteIfExists({saved,fullfile(root,'models','test_tcnn_hybrid.mat')}));
+cleanup = onCleanup(@() deleteIfExists({saved,fullfile(root,'models','test_tcnn_hybrid.mat'), ...
+    fullfile(root,'models','test_tcnn_hybrid_last.mat')}));
 evalc(['[m,~] = train_receiver(''Link'',pa,''Flow'',''tcnn_fcnn'',''Name'',''test_tcnn_hybrid'',' ...
     '''InitFrom'',saved,''Freeze'',{''fcnn''},''MaxEpochs'',1,''SlotsPerSeed'',1,' ...
     '''ValidationSlotsPerSeed'',1,''TCNNWidths'',[8 8],''TCNNDilations'',[1 1],' ...
@@ -148,11 +149,45 @@ passed = report(all(reached),sprintf( ...
 evalc(['[m,~] = train_receiver(''Link'',pa,''Flow'',''tcnn_feq'',''TCNNArchitecture'',''paper'',' ...
     '''TCNNWidths'',[8 16],''Name'',''test_tcnn_paper'',''MaxEpochs'',1,''SlotsPerSeed'',1,' ...
     '''ValidationSlotsPerSeed'',1,''SIRRange'',[Inf Inf],''ExecutionEnvironment'',''cpu'');']);
-cleanupPaper = onCleanup(@() deleteIfExists({fullfile(root,'models','test_tcnn_paper.mat')}));
+cleanupPaper = onCleanup(@() deleteIfExists({fullfile(root,'models','test_tcnn_paper.mat'), ...
+    fullfile(root,'models','test_tcnn_paper_last.mat')}));
 llrP = nn.receive(rxWaveform,ctx,m);
 passed = report(strcmp(m.TCNNArchitecture,'paper') && isequal(m.TCNNInputSize,inputSize) && ...
     numel(llrP) == numel(llrLS) && all(isfinite(llrP)), ...
     '   train_receiver with TCNNArchitecture paper trains, saves, and nn.receive runs it') && passed;
+
+%% 7. LLR calibration under mixed conditions (as in real training)
+% Random SNR, Doppler, delay spread, back-off and PA per slot: the
+% conventional LLRs are overconfident, so without calibration the TCNN
+% can lower the loss by degrading the signal. With the calibration learned
+% alongside, the loss must fall without the BER rising.
+fprintf('7. Mixed conditions, 32 training / 16 validation slots, small TCNN, 15 epochs\n');
+ncfg = nn_config('Link',pa,'SIRRange',[Inf Inf],'PABackoffRange',[0 10],'MaxEpochs',15, ...
+    'MiniBatchSize',4,'LearningRate',3e-3,'TCNNWidths',[16 16 16],'TCNNDilations',[1 2 1], ...
+    'ExecutionEnvironment','cpu','Verbose',false);
+baseCfg = simo_config(quiet{:},ncfg.Link{:});
+ctx = rx.context(baseCfg);
+bank = nn.pa_bank(baseCfg,ncfg);
+trainPlan = nn.plan_slots(ncfg,501,32,1,[],bank.Training);
+valPlan = nn.plan_slots(ncfg,502,16,1,trainPlan.Seed,bank.Validation);
+trainData = nn.make_data(baseCfg,ncfg,trainPlan);
+valData = nn.make_data(baseCfg,ncfg,valPlan,true);
+forward = @(p,b,t) nn.flow_tcnn_feq(p,b,t,ctx);
+inputSize = nn.tcnn_input_size(ctx,'residual');
+rng(ncfg.InitializationSeed,'twister');
+net = nn.tcnn(inputSize,ncfg.TCNNWidths,ncfg.TCNNDilations);
+[conv.Loss,conv.BER] = scoreFlow(struct('tcnn',net),forward,valData);
+[bestU,histU] = nn.train(struct('tcnn',net),forward,@(e) trainData,valData,ncfg,{'tcnn'});
+[bestC,histC] = nn.train(struct('tcnn',net,'calibration',nn.llr_calibration()),forward, ...
+    @(e) trainData,valData,ncfg,{'tcnn','calibration'});
+[a,floorVariance] = calibrationValues(bestC.Params.calibration);
+fprintf('        conventional:          loss %.4f, BER %.4f\n',conv.Loss,conv.BER);
+fprintf('        TCNN, no calibration:  loss %.4f, BER %.4f (best epoch %d)\n', ...
+    histU.ValidationLoss(bestU.Epoch),histU.ValidationBER(bestU.Epoch),bestU.Epoch);
+fprintf('        TCNN + calibration:    loss %.4f, BER %.4f (best epoch %d; a %.3f, eps %.2e)\n', ...
+    histC.ValidationLoss(bestC.Epoch),histC.ValidationBER(bestC.Epoch),bestC.Epoch,a,floorVariance);
+ok = histC.ValidationLoss(bestC.Epoch) < 0.8*conv.Loss && histC.ValidationBER(bestC.Epoch) <= 1.02*conv.BER;
+passed = report(ok,'with calibration: loss at least 20% below conventional, BER not above it') && passed;
 
 if passed, fprintf('All TCNN checks passed.\n'); else, fprintf('Some TCNN checks FAILED.\n'); end
 end
@@ -175,6 +210,14 @@ function [loss,ber] = scoreFlow(params,forward,data)
         errors = errors + nnz((x(m) > 0) ~= l(m)); bits = bits + nnz(m);
     end
     loss = lossSum/bits; ber = errors/bits;
+end
+
+function [a,floorVariance] = calibrationValues(net)
+    % The calibration's a and eps (see nn.calibrate_llr).
+    L = net.Learnables;
+    z = nn.calibrate_llr()*extractdata(L.Value{strcmp(L.Parameter,'Weights')}(:)) + ...
+        extractdata(L.Value{strcmp(L.Parameter,'Bias')}(:));
+    a = exp(z(1)); floorVariance = exp(z(2));
 end
 
 function v = extractLearnables(net)

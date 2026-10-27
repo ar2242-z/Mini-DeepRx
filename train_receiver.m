@@ -6,7 +6,17 @@ function [model, history] = train_receiver(varargin)
 %      train_receiver(args{:},'Flow','tcnn_fcnn','TCNNArchitecture','paper','Name','hybrid_paper')
 %      train_receiver(args{:},'Flow','tcnn_fcnn','Name','tcnn_fcnn', ...
 %          'InitFrom','models/fcnn_pa.mat','Freeze',{'fcnn'})
+%   With a learning-rate schedule (experiments/pa_schedule):
+%      args = pa_schedule;
+%      train_receiver(args{:},'Flow','tcnn_feq','Name','tcnn_feq_s','FindLearningRate',true)
+%      train_receiver(args{:},'Flow','tcnn_feq','Name','tcnn_feq_s')
+%      train_receiver(args{:},'Flow','tcnn_feq','Name','tcnn_feq_s','Resume',true)
 % Name/value pairs are nn_config settings; 'Flow' picks the chain (nn.flow).
+% Start: from scratch (default), from a saved model's networks ('InitFrom',
+% fresh Adam and schedule) or where an interrupted run stopped ('Resume',
+% from models/<Name>_last.mat, saved after every epoch).
+% 'FindLearningRate',true runs only the range test (nn.train) and saves
+% models/<Name>_lr_range.mat; model is then the result, history its steps.
 % Steps:
 %   1. plan disjoint validation and training slots (nn.plan_slots), with
 %      separate training and validation PAs when the Link has a PA bank
@@ -38,7 +48,12 @@ end
 roots = [ncfg.TrainingSeeds(:); ncfg.ValidationSeeds(:)];
 validationPlan = nn.plan_slots(ncfg, ncfg.ValidationSeeds, ncfg.ValidationSlotsPerSeed, 1, roots, ...
     paBank.Validation);
-trainingPlan = nn.plan_slots(ncfg, ncfg.TrainingSeeds, ncfg.SlotsPerSeed, ncfg.MaxEpochs, ...
+planEpochs = ncfg.MaxEpochs;
+if ncfg.FindLearningRate   % Enough slots for every range-test step.
+    stepsPerEpoch = ceil(numel(ncfg.TrainingSeeds)*ncfg.SlotsPerSeed/ncfg.MiniBatchSize);
+    planEpochs = max(planEpochs, ceil(ncfg.RangeTestSteps/stepsPerEpoch));
+end
+trainingPlan = nn.plan_slots(ncfg, ncfg.TrainingSeeds, ncfg.SlotsPerSeed, planEpochs, ...
     [roots; validationPlan.Seed], paBank.Training);
 fprintf('Simulating %d validation slots...\n', height(validationPlan));
 validation = nn.make_data(baseCfg, ncfg, validationPlan, true);
@@ -70,6 +85,9 @@ if ismember('tcnn', flow.Networks)
         params.tcnn = nn.tcnn(tcnnInputSize, ncfg.TCNNWidths, ncfg.TCNNDilations);
     end
 end
+if ismember('calibration', flow.Networks)
+    params.calibration = nn.llr_calibration();
+end
 if ~isempty(ncfg.InitFrom)
     loaded = nn.model_nets(getfield(load(ncfg.InitFrom, 'model'), 'model')); %#ok<GFLD>
     for name = intersect(fieldnames(loaded).', flow.Networks)
@@ -93,13 +111,35 @@ fprintf('Flow %s; %d training slots per epoch.\n', flow.Name, sum(trainingPlan.E
 folder = fullfile(fileparts(mfilename('fullpath')), 'models');
 if ~isfolder(folder), mkdir(folder); end
 file = fullfile(folder, [ncfg.Name '.mat']);
-fprintf('Checkpoints go to %s whenever validation loss improves.\n', file);
+lastFile = fullfile(folder, [ncfg.Name '_last.mat']);
+forward = @(p, b, t) flow.Forward(p, b, t, ctx);
+if ncfg.FindLearningRate
+    % Range test only: no validation, no model saved.
+    [result, steps] = nn.train(params, forward, trainingData, validation, ncfg, trainable);
+    rangeFile = fullfile(folder, [ncfg.Name '_lr_range.mat']);
+    save(rangeFile, 'result', 'steps');
+    fprintf(['Range test: lowest loss at lr %.2g; stopped at %.2g after %d steps.\n' ...
+        'Suggested peak LearningRate %.2g (saved %s).\n'], result.MinimumLossRate, ...
+        result.StoppedAt, result.Steps, result.LearningRate, rangeFile);
+    model = result; history = steps;
+    return
+end
+start = [];
+if ncfg.Resume
+    assert(isfile(lastFile), 'Resume needs %s from an earlier run.', lastFile);
+    saved = load(lastFile, 'state', 'ncfg');
+    checkResume(saved.ncfg, ncfg);
+    start = saved.state;
+    fprintf('Resuming %s.\n', lastFile);
+end
+fprintf('Checkpoints go to %s whenever validation loss improves;\n', file);
+fprintf('%s after every epoch (for Resume).\n', lastFile);
 info = struct('Flow', flow.Name, 'Trainable', {trainable}, 'InputSize', inputSize, ...
     'TCNNInputSize', tcnnInputSize, 'TCNNArchitecture', ncfg.TCNNArchitecture, 'LinkConfig', baseCfg, 'TrainingConfig', ncfg, ...
     'ValidationPlan', validationPlan, 'PABank', paBank);
 save_model = @(best, history) saveModel(file, best, history, info);
-[best, history] = nn.train(params, @(p, b, t) flow.Forward(p, b, t, ctx), ...
-    trainingData, validation, ncfg, trainable, save_model);
+[best, history] = nn.train(params, forward, trainingData, validation, ncfg, trainable, ...
+    save_model, @(state) saveState(lastFile, state, ncfg), start);
 
 % 4. The best checkpoint is already saved; save once more with the full history.
 model = saveModel(file, best, history, info);
@@ -127,4 +167,30 @@ function model = saveModel(file, best, history, info)
     model.ValidationPlan = info.ValidationPlan;
     model.PABank = info.PABank;
     save(file, 'model', 'history');
+end
+
+function saveState(file, state, ncfg) %#ok<INUSD> (saved by name)
+    % Everything nn.train needs to continue (Resume), written to a temporary
+    % file first so an interruption mid-save cannot corrupt the last state.
+    temporary = [file '.tmp.mat'];
+    save(temporary, 'state', 'ncfg');
+    movefile(temporary, file, 'f');
+end
+
+function checkResume(saved, ncfg)
+    % Settings that define the run's slots, steps and networks must match;
+    % MaxEpochs may grow, the rest (rates, Verbose, ...) may change.
+    fields = {'Flow','Link','ChannelModels','SNRRange','DopplerRange','DelaySpreadRange', ...
+        'SIRRange','PABackoffRange','PADither','NumTrainingPAs','NumValidationPAs','PASeed', ...
+        'PilotConfigs','TrainingSeeds','SlotsPerSeed','ValidationSeeds', ...
+        'ValidationSlotsPerSeed','MiniBatchSize','Widths','Dilations','TCNNArchitecture', ...
+        'TCNNWidths','TCNNDilations','Freeze'};
+    differ = fields(~cellfun(@(f) isequal(saved.(f), ncfg.(f)), fields));
+    assert(isempty(differ), 'Resume needs the same settings as the first run; these differ: %s.', ...
+        strjoin(differ, ', '));
+    assert(ncfg.MaxEpochs >= saved.MaxEpochs, 'Resume cannot lower MaxEpochs (%d).', saved.MaxEpochs);
+    if ncfg.MaxEpochs > saved.MaxEpochs && ~strcmp(ncfg.LearningRateSchedule, 'constant')
+        warning('MaxEpochs grew from %d to %d: the learning-rate decay stretches from here on.', ...
+            saved.MaxEpochs, ncfg.MaxEpochs);
+    end
 end

@@ -16,7 +16,7 @@ switch name
         f.Forward = @nn.fcnn_forward;
         f.SinglePilotLayout = false;
     case 'tcnn_feq'
-        f.Networks = {'tcnn'};
+        f.Networks = {'tcnn', 'calibration'};
         f.Forward = @nn.flow_tcnn_feq;
         f.SinglePilotLayout = true;
     case 'tcnn_fcnn'

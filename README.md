@@ -369,6 +369,25 @@ FCNN it starts from. In `tcnn_feq` only the TCNN learns. The loss is the same bi
 cross-entropy, on the conventional receiver's LLRs (logit = −LLR), and the gradients pass back
 through the fixed FFT, LS estimation, linear interpolation, LMMSE equalizer and demapper.
 
+**LLR calibration in `tcnn_feq`.** The conventional LLRs are badly overconfident: the
+demapper's noise variance ν counts only thermal noise, not the channel estimation error of one
+DMRS symbol held over a slot with Doppler, nor the PA distortion. On mixed training conditions
+their cross-entropy is far above ln 2 (worse than guessing). Trained through them, a TCNN
+lowers the loss fastest by making the signal look noisier, so the LLRs shrink, and the BER
+rises. That is what the earlier 150-epoch TCNN run did (loss 1.91 → 0.52, BER 0.177 → 0.203).
+`tcnn_feq` therefore learns two extra numbers with the TCNN (`nn.llr_calibration`,
+`nn.calibrate_llr`):
+
+    LLR' = a · LLR · ν / (ν + ε)        (the demapper with noise variance (ν + ε)/a)
+
+ε is an error floor relative to the symbol power and caps |LLR| at high SNR; a is an overall
+scale. Both are positive, so the calibration never flips a bit: it only fixes the confidence,
+and the TCNN's gradient has to come from getting more bits right. `test_tcnn` part 7 shows the
+difference on 32 mixed-condition slots: without calibration the loss falls (0.88 → 0.64) while
+the BER rises (0.1885 → 0.1963); with it the loss falls further (0.40) and the BER stays at the
+conventional receiver's (0.1898; a = 0.27, ε = 0.022). Models saved before the calibration
+existed run without it.
+
 | File | Role |
 |---|---|
 | `nn.tcnn` | The network: residual blocks of depthwise-separable 3-tap convolutions along time (widths 64-128-256-128-64, dilations 1-2-4-2-1, so each output sees 42 samples ≈ 5.5 µs, enough for the channel's delay spread). Its output is input + correction, with the correction layer starting at zero. |
@@ -376,7 +395,8 @@ through the fixed FFT, LS estimation, linear interpolation, LMMSE equalizer and 
 | `nn.flow`, `nn.flow_tcnn_feq`, `nn.flow_tcnn_fcnn` | The flows: which networks each uses and its forward pass. A new flow is one case in `nn.flow` plus one forward function. |
 | `nn.to_planes` | LLRs in transmit order → bit planes on the grid, so the conventional demapper's output uses the FCNN's loss and labels. |
 | `nn.in_training` | Frozen networks run in prediction mode, so their batch-norm statistics stay fixed. |
-| `train_receiver.m` | `train_fcnn` for any flow. `'Flow'` picks the chain, `'InitFrom'` loads networks from a saved model, and `'Freeze'` keeps named networks fixed. It saves `model.Flow`, `model.Nets` (one field per network) and `model.Trainable`. |
+| `train_receiver.m` | `train_fcnn` for any flow. `'Flow'` picks the chain, `'InitFrom'` loads networks from a saved model, `'Freeze'` keeps named networks fixed, `'Resume'` continues an interrupted run and `'FindLearningRate'` runs a learning-rate range test. It saves `model.Flow`, `model.Nets` (one field per network) and `model.Trainable`, plus `models/<Name>_last.mat` after every epoch. |
+| `nn.learning_rate`, `nn.clip_gradients` | The learning-rate schedule (warmup, hold, linear or cosine decay) and per-network gradient clipping used by `nn.train`. |
 | `nn.receive` | Runs any saved model's flow (models without `Flow` are FCNNs). |
 
 **Training the PA experiments** (shared settings from `experiments/pa_common.m`):
@@ -396,6 +416,67 @@ To fine-tune both networks of the hybrid afterwards, run `train_receiver(args{:}
 
 The TCNN works on 7680 samples × 2 antennas per slot. Expect an epoch to take about as long as
 the FCNN's, because slot simulation dominates.
+
+#### Learning-rate schedule, gradient clipping and Resume: `experiments/pa_schedule.m`
+
+`pa_schedule` is `pa_common` plus a training recipe. Train every receiver you compare with it:
+
+| Setting | `pa_schedule` | Default (`nn_config`) |
+|---|---|---|
+| `MiniBatchSize` | 10 (100 Adam steps per 1000-slot epoch, 15 000 in all) | 4 |
+| `LearningRate` (peak) | 3e-3 | 1e-3 |
+| `LearningRateSchedule` | `'linear'` | `'constant'` |
+| `WarmupSteps` | 200 (2 epochs): the rate rises linearly from 0 | 0 |
+| `DecayStart` | 0: the decay starts right after the warmup | 0 |
+| `FinalLearningRate` | 2e-3, reached at the last step | 0 |
+| `GradientClip` | 20 per network | `Inf` (off) |
+
+`nn.learning_rate` computes the rate at every step: warmup to `LearningRate` over `WarmupSteps`,
+held until `DecayStart` (a fraction of all steps; never before the warmup ends), then `'linear'`
+or `'cosine'` decay to `FinalLearningRate` at the last step. The defaults keep the old constant
+rate.
+
+`GradientClip` caps each trained network's gradient norm at every step (`nn.clip_gradients`),
+keeping its direction, so one bad batch cannot wreck a network at a high learning rate. It is
+per network, so the LLR calibration's large gradients (scaled by its gain of 50) never shrink
+the TCNN's step. Measured at the start of training with batch 10: FCNN about 2; TCNN 6–10 with
+spikes up to 250; calibration 3–18 with spikes up to 180. A clip of 20 only cuts the spikes. The
+epoch log (`grad`) and `history.GradientNorm` (one column per network) show the median norms;
+keep the clip at 3–5× the typical value.
+
+```matlab
+addpath experiments
+args = pa_schedule;
+% 1. Learning-rate range test (a few minutes): rates rise from 1e-5 to 1e-1 over 300 steps
+train_receiver(args{:}, 'Flow','tcnn_feq', 'Name','tcnn_feq_s', 'FindLearningRate',true)
+% 2. Train (override the peak if the test suggests another, e.g. 'LearningRate',2e-3)
+train_receiver(args{:}, 'Flow','tcnn_feq', 'Name','tcnn_feq_s')
+train_receiver(args{:}, 'Flow','fcnn', 'Name','fcnn_pa_s')        % the same recipe for the FCNN
+% 3. Continue after an interruption: the same call plus 'Resume',true
+train_receiver(args{:}, 'Flow','tcnn_feq', 'Name','tcnn_feq_s', 'Resume',true)
+```
+
+**Range test.** `'FindLearningRate',true` trains for `RangeTestSteps` (300) steps while the rate
+rises exponentially over `RangeTestRates` ([1e-5 1e-1]), stops once the smoothed loss reaches 4×
+its minimum, and suggests a tenth of the rate at the lowest loss. The steps are saved in
+`models/<Name>_lr_range.mat` (`steps.LearningRate`, `steps.SmoothedLoss`; plot one against the
+other on a log x-axis). Nothing else is saved. For `tcnn_feq`, keep the peak at or below about
+3e-3 even if the test suggests more: gradients through the LMMSE equalizer spike in deep fades.
+
+**Three ways to start:**
+
+| | Networks | Adam state and schedule | Use for |
+|---|---|---|---|
+| default | new, random (the residual TCNN starts as pass-through) | new | a new run |
+| `'InitFrom','models/x.mat'` | loaded from `x.mat` | new (warmup protects the loaded weights) | fine-tuning, new conditions, a new recipe; give it a new `Name` |
+| `'Resume',true` | from `models/<Name>_last.mat` | continued: Adam moments, step count, schedule position, history, best checkpoint, random state | an interrupted run |
+
+`Resume` continues exactly where the run stopped: 2 epochs followed by a resume to 3 gives the
+same weights as 3 epochs in one go (checked in `test_train`). The next epoch's planned slots are
+used, so no slot repeats. Give the same settings as the first call: those that define the slots,
+the steps or the networks (`MiniBatchSize`, seeds, ranges, widths, ...) are checked. `MaxEpochs`
+may grow; with a decaying schedule the decay then stretches from that point, so the rate jumps
+up a little. `models/<Name>.mat` stays the best-validation model, as before.
 
 #### Relation to the paper, and two TCNN architectures: `'TCNNArchitecture'`
 
@@ -441,10 +522,14 @@ worse than the conventional receiver and has to learn the identity first. Models
 
 The paper also trains differently: TDL-B/C/D for training and TDL-A/E for validation,
 back-off −1 to 7 dB, a 17th-order polynomial fitted to a measured PA, batch 20, and learning
-rate 1e-3 with warm-up and linear decay. `pa_common` keeps this project's link: [1 −1/3] PA,
-back-off 0–10 dB, TDL-C with randomized Doppler and delay spread, batch 4, constant learning rate. The PA bank (30
-training and 10 validation PAs, dither proportional to each coefficient, rising and concave
-check) follows the paper.
+rate 1e-3 with an 800-step warm-up and linear decay after 30% of training. The paper says "240
+to 300 thousand epochs" on 105 000 training TTIs; that is only possible if an epoch means one
+batch of 20 (about 5–6 M TTIs processed, ≈ 50 passes over its data). This project trains on
+fresh slots every epoch instead: 150 000 different TTIs in a default run. `pa_common` keeps
+this project's link: [1 −1/3] PA, back-off 0–10 dB, TDL-C with randomized Doppler and delay
+spread, batch 4, constant learning rate; `pa_schedule` adds batch 10 and a warmup-plus-decay
+schedule. The PA bank (30 training and 10 validation PAs, dither proportional to each
+coefficient, rising and concave check) follows the paper.
 
 ## Training curves: `plot_history`
 
@@ -514,6 +599,7 @@ test_chan        % channel checks
 test_rx          % receiver checks, end to end with LDPC
 test_nn          % neural-receiver pipeline checks (about 1 min with a GPU)
 test_tcnn        % TCNN flows (CPU only, so it can run beside a GPU training)
+test_train       % training options: schedule, clipping, Resume, range test (CPU only)
 ```
 
 `test_chan` checks the channel against the earlier code (identical timing, `H`, noiseless and
@@ -558,7 +644,19 @@ trained network beating the conventional receiver in the new pipeline.
 - an untrained TCNN in front of an FCNN gives that FCNN's LLRs;
 - `train_receiver` with `InitFrom` and `Freeze` leaves the frozen FCNN unchanged;
 - the paper TCNN's per-symbol layout is exact (an identity network returns the slot),
-  gradients reach all its weights, and `train_receiver` / `nn.receive` run it.
+  gradients reach all its weights, and `train_receiver` / `nn.receive` run it;
+- on mixed conditions, `tcnn_feq` with the LLR calibration lowers the loss without raising the
+  BER (without it, the BER rises).
+
+`test_train` checks the training options:
+- `nn.learning_rate`: the default is constant; warmup, hold, linear and cosine decay, and the
+  range test's rates have the right values;
+- `nn.clip_gradients` caps each network separately and keeps the direction;
+- `nn.train` stopped by an error after epoch 2 and resumed from its saved state ends with
+  exactly the weights and history of an uninterrupted run, with a decaying rate;
+- `train_receiver`: 2 epochs + `Resume` to 3 equals 3 epochs, and a changed `MiniBatchSize`
+  is refused;
+- `'FindLearningRate',true` runs, stops in time and saves its steps.
 
 `test_tx`, `test_chan`, `test_rx` and `test_nn` compare against `reference/ref_v0.mat`
 (saved from the earlier code) where the new code is meant to agree with it.

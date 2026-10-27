@@ -12,6 +12,8 @@ function [model, history] = train_fcnn(varargin)
 %      every time validation improves, so an interrupted run keeps it
 % The model is used with nn.receive(rxWaveform, rx.context(cfg), model).
 ncfg = nn_config(varargin{:});
+assert(~ncfg.Resume && ~ncfg.FindLearningRate && isempty(ncfg.InitFrom), ...
+    'Use train_receiver(''Flow'',''fcnn'', ...) for Resume, FindLearningRate and InitFrom.');
 quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 baseCfg = simo_config(quiet{:}, ncfg.Link{:});
 ctx = rx.context(baseCfg);

@@ -38,7 +38,27 @@ addParameter(p, 'ValidationSlotsPerSeed', 50, count);
 % Optimization.
 addParameter(p, 'MaxEpochs', 150, count);
 addParameter(p, 'MiniBatchSize', 4, count);
-addParameter(p, 'LearningRate', 1e-3, @(x) isscalar(x) && x > 0);
+addParameter(p, 'LearningRate', 1e-3, @(x) isscalar(x) && x > 0);   % Peak rate.
+% Learning-rate schedule (nn.learning_rate), per Adam step: a linear warmup
+% from 0 over WarmupSteps, then LearningRate until DecayStart (fraction of
+% all steps; decay never starts before warmup ends), then 'linear' or
+% 'cosine' decay to FinalLearningRate at the last step. 'constant' never
+% decays. The defaults give the old constant rate.
+addParameter(p, 'LearningRateSchedule', 'constant', @(x) any(strcmp(x, {'constant','linear','cosine'})));
+addParameter(p, 'WarmupSteps', 0, @(x) isscalar(x) && x >= 0 && x == fix(x));
+addParameter(p, 'DecayStart', 0, @(x) isscalar(x) && x >= 0 && x <= 1);
+addParameter(p, 'FinalLearningRate', 0, @(x) isscalar(x) && x >= 0);
+% Scale each step's gradients (all trained networks together) down to this
+% L2 norm when larger, so one bad batch (a deep fade) cannot wreck the
+% networks at a high learning rate. Inf: off. history.GradientNorm logs
+% the median norm before clipping.
+addParameter(p, 'GradientClip', Inf, @(x) isscalar(x) && x > 0);
+% Learning-rate range test instead of training (train_receiver): RangeTestSteps
+% steps with the rate rising exponentially over RangeTestRates; prints the
+% suggested peak LearningRate and saves models/<Name>_lr_range.mat.
+addParameter(p, 'FindLearningRate', false, @(x) islogical(x) && isscalar(x));
+addParameter(p, 'RangeTestSteps', 300, count);
+addParameter(p, 'RangeTestRates', [1e-5 1e-1], @(x) range(x) && x(1) > 0);
 addParameter(p, 'InitializationSeed', 7, @(x) seeds(x) && isscalar(x));
 addParameter(p, 'ExecutionEnvironment', 'auto', @(x) any(strcmp(x, {'auto','cpu','gpu'})));
 addParameter(p, 'Verbose', true, @(x) islogical(x) && isscalar(x));
@@ -55,9 +75,15 @@ addParameter(p, 'TCNNDilations', [], @(x) isempty(x) || (isnumeric(x) && isvecto
 % Receiver flow (train_receiver, see nn.flow): 'fcnn', 'tcnn_feq', 'tcnn_fcnn'.
 addParameter(p, 'Flow', 'fcnn', @(x) ischar(x) || isstring(x));
 % Start from networks of a saved model (e.g. 'models/fcnn_pa.mat'), and
-% names of networks to keep fixed (e.g. {'fcnn'}).
+% names of networks to keep fixed (e.g. {'fcnn'}). Adam and the schedule
+% start fresh: for fine-tuning or new conditions.
 addParameter(p, 'InitFrom', '', @(x) ischar(x) || isstring(x));
 addParameter(p, 'Freeze', {}, @(x) iscellstr(x) || isstring(x));
+% Continue an interrupted train_receiver run from models/<Name>_last.mat
+% (saved every epoch): networks, Adam state, step count, schedule position,
+% history and best checkpoint, and the next epoch's planned slots. Give the
+% same settings as the first call; MaxEpochs may grow.
+addParameter(p, 'Resume', false, @(x) islogical(x) && isscalar(x));
 addParameter(p, 'Name', 'fcnn', @(x) ischar(x) || isstring(x)); % Output file name.
 parse(p, varargin{:});
 ncfg = p.Results;
@@ -68,6 +94,11 @@ ncfg.Flow = char(ncfg.Flow);
 ncfg.InitFrom = char(ncfg.InitFrom);
 ncfg.Freeze = cellstr(ncfg.Freeze);
 ncfg.TCNNArchitecture = char(ncfg.TCNNArchitecture);
+ncfg.LearningRateSchedule = char(ncfg.LearningRateSchedule);
+assert(ncfg.FinalLearningRate <= ncfg.LearningRate, ...
+    'FinalLearningRate must not exceed the peak LearningRate.');
+assert(~(ncfg.Resume && ~isempty(ncfg.InitFrom)), ...
+    'Resume continues a run; InitFrom starts a new one. Give one of them.');
 if strcmp(ncfg.TCNNArchitecture, 'paper')
     assert(isempty(ncfg.TCNNDilations), 'The paper TCNN has no dilations; give TCNNWidths only.');
 else
