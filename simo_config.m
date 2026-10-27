@@ -61,6 +61,19 @@ function cfg = simo_config(varargin)
     % The default [1 -1/3] peaks exactly at |u|=1. Complex terms add AM/PM.
     addParameter(p,'PACoefficients',[1 -1/3], ...
         @(x) isnumeric(x) && isvector(x) && ~isempty(x) && all(isfinite(x)));
+    % Channel coding of the data bits. 'none' (default) puts random bits
+    % straight on the grid and leaves every slot unchanged. 'ldpc' is the
+    % 5G UL-SCH chain (TS 38.212): CRC, LDPC, rate matching to fill the grid.
+    addParameter(p,'Coding','none', ...
+        @(x) (ischar(x) || isstring(x)) && any(strcmp(x,{'none','ldpc'})));
+    % Target code rate R: transport block size about R * coded bits (nrTBS).
+    addParameter(p,'TargetCodeRate',0.5, ...
+        @(x) isnumeric(x) && isscalar(x) && isreal(x) && x>0 && x<0.95);
+    addParameter(p,'LDPCMaxIterations',25,positiveInteger); % Receiver decoder.
+    % Receiver timing: 'dmrs' estimates the slot start by correlating with the
+    % known pilots; 'perfect' uses the channel's true timing (genie).
+    addParameter(p,'TimingEstimation','dmrs', ...
+        @(x) (ischar(x) || isstring(x)) && any(strcmp(x,{'dmrs','perfect'})));
     addParameter(p,'Seed',42, ...
         @(x) nonnegativeScalar(x) && x==fix(x) && x<=2^32-1);
     addParameter(p,'ShowPlots',true,logicalScalar);
@@ -72,6 +85,8 @@ function cfg = simo_config(varargin)
     cfg.Modulation = char(cfg.Modulation);
     cfg.ChannelModel = char(cfg.ChannelModel);
     cfg.PAModel = char(cfg.PAModel);
+    cfg.Coding = char(cfg.Coding);
+    cfg.TimingEstimation = char(cfg.TimingEstimation);
     cfg.PACoefficients = cfg.PACoefficients(:).'; % Row vector.
     assert(cfg.NumResourceBlocks<=275,'NumResourceBlocks must not exceed 275.');
     assert(cfg.Nfft>12*cfg.NumResourceBlocks, ...
