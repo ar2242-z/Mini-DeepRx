@@ -13,7 +13,11 @@ function [llr, trace] = receive(rxWaveform, ctx, mode, genie)
 %                     timing (a one-sample shift rotates subcarrier k by
 %                     2*pi*k/Nfft), so this mode always uses the true timing
 %                     genie.TimingOffset. The noise power is still estimated
-%                     from the pilots.
+%                     from the pilots. With a PA, the data sees g*H, where
+%                     g = genie.PAGain is the PA's Bussgang gain (y = g*x +
+%                     distortion); a perfect estimator would measure g*H at
+%                     the pilots, so this mode uses g*H too. The distortion
+%                     itself stays an impairment.
 %   genie (truth from run_link) is needed only for 'knownH' and for
 %   ctx.TimingEstimation 'perfect'. The conventional receiver with 'dmrs'
 %   timing uses nothing but rxWaveform and ctx.
@@ -40,6 +44,7 @@ switch mode
     case 'knownH'
         assert(isfield(genie, 'H'), 'knownH needs the true channel genie.H.');
         H = genie.H;
+        if isfield(genie, 'PAGain'), H = H * genie.PAGain; end
     otherwise
         error('Unknown receiver mode: %s.', mode);
 end

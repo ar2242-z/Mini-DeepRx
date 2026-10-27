@@ -4,7 +4,9 @@ function [rxWaveform, truth, trace] = run_link(cfg)
 %   rxWaveform  samples x receive antennas; the only receiver input
 %               (together with rx.context(cfg)).
 %   truth       for evaluation and genie baselines only:
-%               InfoBits, CodedBits, Code, Grid, H, TimingOffset, NoiseVariance
+%               InfoBits, CodedBits, Code, Grid, H, PAGain, TimingOffset,
+%               NoiseVariance. H is the channel alone; PAGain is the PA's
+%               Bussgang gain g (1 when linear), so the data sees g*H.
 %   trace       tx.transmit and chan.propagate outputs (all checkpoints)
 % Random streams, all derived from cfg.Seed and independent of each other:
 %   bits         mt19937ar, seed cfg.Seed
@@ -24,6 +26,7 @@ truth.CodedBits = txOut.CodedBits;
 truth.Code = txOut.Code;
 truth.Grid = txOut.Grid;
 truth.H = chOut.H;
+truth.PAGain = txOut.PAGain;
 truth.TimingOffset = chOut.TimingOffset;
 truth.NoiseVariance = chOut.NoiseVariance;
 trace.Tx = txOut;
