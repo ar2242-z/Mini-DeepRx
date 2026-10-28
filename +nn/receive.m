@@ -7,6 +7,7 @@ function [llr, trace] = receive(rxWaveform, ctx, model)
 %     'fcnn'       rx.sync -> rx.ofdm_demod -> nn.deeprx_features -> FCNN
 %     'tcnn_feq'   rx.sync -> TCNN -> conventional receiver (FFT ... demap)
 %     'tcnn_fcnn'  rx.sync -> TCNN -> rx.ofdm_demod -> features -> FCNN
+%     'ftf'        rx.sync -> rx.ofdm_demod -> features -> FTF-CNN
 %   Uses only rxWaveform and ctx, never the truth. ctx must have the pilot
 %   layout and link the model was trained for.
 %   model: saved by train_receiver / train_fcnn. llr: (Q*D) x 1,

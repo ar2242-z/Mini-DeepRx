@@ -72,7 +72,16 @@ addParameter(p, 'Dilations', [], @(x) isempty(x) || (isnumeric(x) && size(x,2) =
 addParameter(p, 'TCNNArchitecture', 'residual', @(x) any(strcmp(x, {'residual','paper'})));
 addParameter(p, 'TCNNWidths', [], @(x) isempty(x) || (isnumeric(x) && isvector(x)));
 addParameter(p, 'TCNNDilations', [], @(x) isempty(x) || (isnumeric(x) && isvector(x)));
-% Receiver flow (train_receiver, see nn.flow): 'fcnn', 'tcnn_feq', 'tcnn_fcnn'.
+% Frequency-domain hybrid (Flow 'ftf', nn.ftf_cnn): the Widths/Dilations
+% blocks (default the FCNN's) split [j k l] into frequency, pseudo-time and
+% frequency parts; the pseudo-time domain has FTFTransformSize samples per
+% OFDM symbol ([]: the link's Nfft, the transmitter's own sample grid);
+% FTFTimeDilations ([]: ones) are the pseudo-time blocks' [sample symbol]
+% dilations, k x 2.
+addParameter(p, 'FTFSplit', [4 3 4], @(x) isnumeric(x) && numel(x) == 3 && all(x >= 1 & x == fix(x)));
+addParameter(p, 'FTFTransformSize', [], @(x) isempty(x) || (isscalar(x) && x >= 1 && x == fix(x)));
+addParameter(p, 'FTFTimeDilations', [], @(x) isempty(x) || (isnumeric(x) && size(x,2) == 2));
+% Receiver flow (train_receiver, see nn.flow): 'fcnn', 'tcnn_feq', 'tcnn_fcnn', 'ftf'.
 addParameter(p, 'Flow', 'fcnn', @(x) ischar(x) || isstring(x));
 % Start from networks of a saved model (e.g. 'models/fcnn_pa.mat'), and
 % names of networks to keep fixed (e.g. {'fcnn'}). Adam and the schedule
@@ -89,6 +98,7 @@ parse(p, varargin{:});
 ncfg = p.Results;
 ncfg.ChannelModels = cellstr(ncfg.ChannelModels);
 ncfg.PilotConfigs = ncfg.PilotConfigs(:);
+ncfg.FTFSplit = ncfg.FTFSplit(:).';
 ncfg.Name = char(ncfg.Name);
 ncfg.Flow = char(ncfg.Flow);
 ncfg.InitFrom = char(ncfg.InitFrom);

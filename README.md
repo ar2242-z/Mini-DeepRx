@@ -11,7 +11,7 @@ one function, grouped by where it sits in the chain:
 +tx/    transmitter        bits → LDPC → symbol mapping → resource grid → IFFT + CP → PA
 +chan/  channel            fading → interference → noise
 +rx/    receiver           sync → FFT → channel estimation → equalization → LLRs → LDPC decoding
-+nn/    neural receivers   FCNN (DeepRx) and training; TCNN and hybrids next
++nn/    neural receivers   FCNN (DeepRx), TCNN, hybrids (TCNN/FCNN, FTF-CNN) and training
 ```
 
 All blocks share one configuration struct from `simo_config.m`. The rebuild plan is in
@@ -392,7 +392,7 @@ existed run without it.
 |---|---|
 | `nn.tcnn` | The network: residual blocks of depthwise-separable 3-tap convolutions along time (widths 64-128-256-128-64, dilations 1-2-4-2-1, so each output sees 42 samples ≈ 5.5 µs, enough for the channel's delay spread). Its output is input + correction, with the correction layer starting at zero. |
 | `nn.tcnn_apply` | Slot (L × Nr × B complex) → network input L × 1 × [Re Im per antenna] → cleaned slot. Each slot is scaled to unit RMS for the network and scaled back afterwards. |
-| `nn.flow`, `nn.flow_tcnn_feq`, `nn.flow_tcnn_fcnn` | The flows: which networks each uses and its forward pass. A new flow is one case in `nn.flow` plus one forward function. |
+| `nn.flow`, `nn.flow_tcnn_feq`, `nn.flow_tcnn_fcnn`, `nn.flow_ftf` | The flows: which networks each uses and its forward pass. A new flow is one case in `nn.flow` plus one forward function. |
 | `nn.to_planes` | LLRs in transmit order → bit planes on the grid, so the conventional demapper's output uses the FCNN's loss and labels. |
 | `nn.in_training` | Frozen networks run in prediction mode, so their batch-norm statistics stay fixed. |
 | `train_receiver.m` | `train_fcnn` for any flow. `'Flow'` picks the chain, `'InitFrom'` loads networks from a saved model, `'Freeze'` keeps named networks fixed, `'Resume'` continues an interrupted run and `'FindLearningRate'` runs a learning-rate range test. It saves `model.Flow`, `model.Nets` (one field per network) and `model.Trainable`, plus `models/<Name>_last.mat` after every epoch. |
@@ -488,10 +488,10 @@ Efficiency and Coverage", *IEEE Trans. Wireless Commun.* 22(8), 2023:
 | `'fcnn'` | DeepRx (FCNN), Sec. III-B, the benchmark |
 | `'tcnn_feq'` | **TCNN/FEQ**, Sec. III-C: time-domain CNN + conventional frequency-domain receiver, trained end to end through the untrainable FFT and receiver blocks |
 | `'tcnn_fcnn'` | **HybridDeepRx (TCNN/FCNN)**, Sec. III-D: the same TCNN and the DeepRx CNN, joined by the FFT, trained jointly |
+| `'ftf'` | **Frequency-domain HybridDeepRx (FTF-CNN)**, Sec. III-E: DeepRx blocks → parallel IFFTs → pseudo-time blocks → parallel FFTs → DeepRx blocks, all after the receiver FFT (see below) |
 
 The conventional receiver (the FEQ) is the paper's: LS at the DMRS, linear interpolation,
-LMMSE equalization. The paper uses two DMRS symbols per slot, this project one. The
-paper's purely frequency-domain variant (FTF-CNN, Sec. III-E) is not implemented.
+LMMSE equalization. The paper uses two DMRS symbols per slot, this project one.
 
 | | `'residual'` (default, `nn.tcnn`) | `'paper'` (`nn.tcnn_paper`, Sec. III-C) |
 |---|---|---|
@@ -531,6 +531,49 @@ spread, batch 4, constant learning rate; `pa_schedule` adds batch 10 and a warmu
 schedule. The PA bank (30 training and 10 validation PAs, dither proportional to each
 coefficient, rising and concave check) follows the paper.
 
+#### Frequency-domain hybrid (FTF-CNN): `'Flow','ftf'`
+
+The paper's main proposal (Sec. III-E, Fig. 2(b)). The front end is the ordinary receiver's
+(sync, CP removal, FFT); every learned layer runs after the FFT, on the DeepRx features, but
+part of the network works in a *pseudo-time* domain:
+
+```
+rx.sync → rx.ofdm_demod → deeprx_features → f1: input conv + j blocks          F × N   (frequency)
+            → parallel IFFTs (channel pairs → complex, per OFDM symbol)
+            → t: k blocks                                                      M × N   (pseudo-time)
+            → parallel FFTs back to the occupied subcarriers
+            → f2: l blocks + 3×3 output conv → bit logits                      F × N   (frequency)
+```
+
+The idea: f1 removes the channel, t undoes the PA in (pseudo-)time, where it acted, and f2 maps
+symbols to bits — the impairments are undone in the reverse order of the transmitter.
+
+| | Paper | Here (`nn.ftf_cnn`, `nn.flow_ftf`) |
+|---|---|---|
+| Blocks | 11 pre-activation ResNet blocks, as DeepRx (Table III: 654 k parameters) | the FCNN's 11 blocks and widths (`nn.fcnn_layout`, built by `nn.resnet_blocks`), so **exactly the FCNN's 1,234,436 parameters**: f1 177,856 + t 786,432 + f2 270,148 |
+| Split j / k / l | not given | `FTFSplit` [4 3 4]: f1 64-64-128-128, t 256-256-256, f2 128-128-64-64 |
+| Transforms | Nj/2 parallel IFFTs over subcarriers per symbol, real/imaginary channel pairs, no bottleneck (Fig. 3); size not the primary FFT's | `nn.pair_transform` with `nn.pseudo_time_basis`: channels 1..C/2 real, C/2+1..C imaginary; the occupied subcarriers in their bins of an M-point IFFT, scaled to keep the energy (A′A = I, so the FFT back is A′ and exact) |
+| Pseudo-time size M | — | `FTFTransformSize`, default the link's Nfft (512): the transmitter's own sample grid. For a transmit grid column X, A·X/√Nfft *is* that symbol's waveform without CP (checked in `test_ftf`), so t sees the samples the PA distorted. 312 (= F, critically sampled) is the cheaper option |
+| Pseudo-time convolutions | 3×3 | the same separable 3×3, dilations `FTFTimeDilations` (default 1: the PA has no memory, and 300 ns is 2–3 samples). Zero padding at the ends of each symbol where the transform is circular |
+| Networks | one model | three `dlnetwork`s (`ftf_f1`, `ftf_t`, `ftf_f2`) joined by the fixed transforms, so `nn.train` logs and clips each one's gradient |
+
+It trains from scratch (no pass-through start, no LLR calibration: f2 outputs logits as the
+FCNN does). `Widths`/`Dilations` apply to it as to the FCNN, with `sum(FTFSplit)` blocks.
+
+```matlab
+addpath experiments
+args = pa_schedule;
+train_receiver(args{:}, 'Flow','ftf', 'Name','ftf', 'FindLearningRate',true)   % optional, a few minutes
+train_receiver(args{:}, 'Flow','ftf', 'Name','ftf')                            % ≈ 2–2.5 h on an RTX 5070
+compare_snr({'ftf','fcnn_pa','tcnn_feq_s'}, 'Link',{'PABackoffdB',3}, 'Name','snr_ftf_bo3')
+```
+
+Measured with `pa_schedule` on the RTX 5070: about 5 s per 100 training slots, so ≈ 55 s per
+1000-slot epoch, and 1.4 GB of GPU memory. Gradient norms at the start are 0.3–0.8 per network,
+so `GradientClip` 20 never acts. `fcnn_pa` was trained with `pa_common` (batch 4, constant
+1e-3), not `pa_schedule`, so part of any difference may be the recipe; `fcnn_pa_s` would
+separate the two.
+
 ## Training curves: `plot_history`
 
 Every model file stores its per-epoch `history`: training loss, validation loss, BER, BLER and
@@ -551,7 +594,8 @@ It makes three panels, one colour per model:
 The circle marks the best epoch, which is the network that was saved. It prints a summary
 table (epochs, best epoch, losses, BER and BLER at the best epoch, hours) and saves
 `results/<Name>.png` (default `training_history`). A run still in progress saves its history
-only up to its latest best epoch.
+only up to its latest best epoch; `plot_history({'ftf_last'})` reads the resume checkpoint
+instead, which has every epoch so far.
 
 Validation sets differ between experiments, e.g. `fcnn` has interferers and `fcnn_pa` has
 PAs, so compare their curves for **shape**, not level. Use `compare_snr` to compare receivers
@@ -599,6 +643,7 @@ test_chan        % channel checks
 test_rx          % receiver checks, end to end with LDPC
 test_nn          % neural-receiver pipeline checks (about 1 min with a GPU)
 test_tcnn        % TCNN flows (CPU only, so it can run beside a GPU training)
+test_ftf         % frequency-domain hybrid: transforms, parameters, gradients, training (CPU, ~6 min)
 test_train       % training options: schedule, clipping, Resume, range test (CPU only)
 ```
 

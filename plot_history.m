@@ -13,7 +13,7 @@ function summary = plot_history(models, varargin)
 %   3. validation BLER after LDPC
 %   The best epoch (lowest validation loss, the saved network) is circled.
 % A run still in progress saves its history up to its latest best epoch,
-% so its curves end there.
+% so its curves end there; give '<name>_last' for every epoch so far.
 % Name/value options: 'Labels' (legend names), 'Name' (results/<Name>.png,
 % default 'training_history').
 % summary: table Model, Flow, Epochs, BestEpoch, TrainingLoss and
@@ -39,6 +39,10 @@ for k = 1:numel(names)
     if ~endsWith(file, '.mat'), file = fullfile(root, 'models', [names{k} '.mat']); end
     assert(isfile(file), 'No model file %s.', file);
     s = load(file);
+    if isfield(s, 'state')                    % <Name>_last.mat: every epoch so far.
+        s.history = s.state.History;
+        s.model = struct('BestEpoch', s.state.Best.Epoch, 'Flow', s.ncfg.Flow);
+    end
     assert(isfield(s, 'history'), '%s has no training history.', file);
     h = s.history(s.history.Epoch > 0, :);
     best = s.model.BestEpoch;

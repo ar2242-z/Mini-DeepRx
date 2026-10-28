@@ -4,6 +4,8 @@ function f = flow(name)
 %     'fcnn'       rx.sync -> FFT -> features -> FCNN              (DeepRx)
 %     'tcnn_feq'   rx.sync -> TCNN -> FFT -> LS -> interpolate -> LMMSE eq. -> demap
 %     'tcnn_fcnn'  rx.sync -> TCNN -> FFT -> features -> FCNN       (hybrid)
+%     'ftf'        rx.sync -> FFT -> features -> FCNN blocks -> IFFT ->
+%                  pseudo-time blocks -> FFT -> FCNN blocks  (FTF-CNN)
 %   f.Networks: names of the networks (fields of params / model.Nets).
 %   f.Forward:  @(params, batch, training, ctx) -> [logits, states], the
 %               forward pass nn.train and nn.receive call.
@@ -22,6 +24,10 @@ switch name
     case 'tcnn_fcnn'
         f.Networks = {'tcnn', 'fcnn'};
         f.Forward = @nn.flow_tcnn_fcnn;
+        f.SinglePilotLayout = false;
+    case 'ftf'
+        f.Networks = {'ftf_f1', 'ftf_t', 'ftf_f2'};
+        f.Forward = @nn.flow_ftf;
         f.SinglePilotLayout = false;
     otherwise
         error('Unknown receiver flow: %s.', name);

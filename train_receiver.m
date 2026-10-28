@@ -4,6 +4,7 @@ function [model, history] = train_receiver(varargin)
 %      addpath experiments; args = pa_common;
 %      train_receiver(args{:},'Flow','tcnn_feq','Name','tcnn_feq')
 %      train_receiver(args{:},'Flow','tcnn_fcnn','TCNNArchitecture','paper','Name','hybrid_paper')
+%      args = pa_schedule; train_receiver(args{:},'Flow','ftf','Name','ftf')   % FTF-CNN
 %      train_receiver(args{:},'Flow','tcnn_fcnn','Name','tcnn_fcnn', ...
 %          'InitFrom','models/fcnn_pa.mat','Freeze',{'fcnn'})
 %   With a learning-rate schedule (experiments/pa_schedule):
@@ -22,7 +23,7 @@ function [model, history] = train_receiver(varargin)
 %      separate training and validation PAs when the Link has a PA bank
 %   2. simulate the fixed validation set once (nn.make_data, with truth
 %      for BLER); training slots are simulated fresh every epoch
-%   3. build the flow's networks (nn.fcnn, nn.tcnn), optionally load some
+%   3. build the flow's networks (nn.fcnn, nn.tcnn, nn.ftf_cnn), optionally load some
 %      from a saved model (InitFrom) and keep some fixed (Freeze)
 %   4. train (nn.train) and save the best validation checkpoint to
 %      models/<Name>.mat, updated every time validation improves
@@ -87,6 +88,15 @@ if ismember('tcnn', flow.Networks)
 end
 if ismember('calibration', flow.Networks)
     params.calibration = nn.llr_calibration();
+end
+if ismember('ftf_f1', flow.Networks)
+    M = ncfg.FTFTransformSize;
+    if isempty(M), M = ctx.Nfft; end
+    nets = nn.ftf_cnn(inputSize, ctx.BitsPerSymbol, M, ncfg.Widths, ncfg.Dilations, ...
+        ncfg.FTFSplit, ncfg.FTFTimeDilations);
+    for name = fieldnames(nets).'
+        params.(name{1}) = nets.(name{1});
+    end
 end
 if ~isempty(ncfg.InitFrom)
     loaded = nn.model_nets(getfield(load(ncfg.InitFrom, 'model'), 'model')); %#ok<GFLD>
@@ -184,7 +194,7 @@ function checkResume(saved, ncfg)
         'SIRRange','PABackoffRange','PADither','NumTrainingPAs','NumValidationPAs','PASeed', ...
         'PilotConfigs','TrainingSeeds','SlotsPerSeed','ValidationSeeds', ...
         'ValidationSlotsPerSeed','MiniBatchSize','Widths','Dilations','TCNNArchitecture', ...
-        'TCNNWidths','TCNNDilations','Freeze'};
+        'TCNNWidths','TCNNDilations','FTFSplit','FTFTransformSize','FTFTimeDilations','Freeze'};
     differ = fields(~cellfun(@(f) isequal(saved.(f), ncfg.(f)), fields));
     assert(isempty(differ), 'Resume needs the same settings as the first run; these differ: %s.', ...
         strjoin(differ, ', '));
