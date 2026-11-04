@@ -31,7 +31,7 @@ function cfg = simo_config(varargin)
     addParameter(p,'MaximumDopplerShift',100,nonnegativeScalar); % Hz; 0 is static.
     % Data modulation (5G TS 38.211 mapping); pilots are unaffected.
     addParameter(p,'Modulation','16QAM', ...
-        @(x) (ischar(x) || isstring(x)) && any(strcmp(x,{'QPSK','16QAM'})));
+        @(x) (ischar(x) || isstring(x)) && any(strcmp(x,{'QPSK','16QAM','64QAM'})));
     % PUSCH DMRS pilots (TS 38.211 6.4.1.1), single port, mapping type A.
     % Defaults give ONE pilot symbol at MATLAB column 3 on every 2nd subcarrier.
     addParameter(p,'DMRSTypeAPosition',2,@(x) isnumeric(x) && isscalar(x) && ismember(x,[2 3]));
@@ -48,13 +48,23 @@ function cfg = simo_config(varargin)
     % Inf (default) means no interferer and leaves every slot unchanged.
     addParameter(p,'SIRdB',Inf, ...
         @(x) isnumeric(x) && isscalar(x) && isreal(x) && (isfinite(x) || x==Inf));
-    % Memoryless transmit power amplifier (PA) applied to the time waveform.
+    % Transmit power amplifier (PA) applied to the time waveform.
     % 'none' (default) is linear and leaves every slot unchanged.
+    % 'rapp' and 'polynomial' are the memoryless miniPA (tx.miniPA);
+    % 'mp3gpp' is the 3GPP TR 38.803 memory polynomial PA (tx.mppa, MPPA.md).
     addParameter(p,'PAModel','none', ...
-        @(x) (ischar(x) || isstring(x)) && any(strcmp(x,{'none','polynomial','rapp'})));
-    % Input back-off: waveform RMS below the saturation amplitude, in dB.
+        @(x) (ischar(x) || isstring(x)) && any(strcmp(x,{'none','polynomial','rapp','mp3gpp'})));
+    % Back-off in dB. miniPA: input RMS below the saturation amplitude.
+    % 'mp3gpp': output back-off, mean output power below the PA's output
+    % power at its 1 dB compression point (as in Pihlajasalo et al. 2023).
     addParameter(p,'PABackoffdB',6, ...
         @(x) isnumeric(x) && isscalar(x) && isreal(x) && isfinite(x));
+    % 'mp3gpp' only: K x M coefficients of the normalized memory polynomial
+    % as a row (tx.mppa_nominal), e.g. one PA of nn.pa_bank; [] is the
+    % nominal 3GPP PA. The PA runs at PAOversampling times the sample rate.
+    addParameter(p,'MPCoefficients',[], ...
+        @(x) isnumeric(x) && (isempty(x) || isvector(x)) && all(isfinite(x)));
+    addParameter(p,'PAOversampling',4,positiveInteger);
     addParameter(p,'RappSmoothness',2,positiveScalar); % Rapp p; larger is sharper.
     % Odd-order terms [a1 a3 a5 ...]: y = a1*u + a3*u|u|^2 + ... Input is held
     % at |u|<=1, so choose terms whose AM/AM curve rises up to |u|=1.
@@ -88,6 +98,7 @@ function cfg = simo_config(varargin)
     cfg.Coding = char(cfg.Coding);
     cfg.TimingEstimation = char(cfg.TimingEstimation);
     cfg.PACoefficients = cfg.PACoefficients(:).'; % Row vector.
+    cfg.MPCoefficients = reshape(cfg.MPCoefficients, 1, []);
     assert(cfg.NumResourceBlocks<=275,'NumResourceBlocks must not exceed 275.');
     assert(cfg.Nfft>12*cfg.NumResourceBlocks, ...
         'Nfft must exceed the number of active subcarriers (12*NumResourceBlocks).');

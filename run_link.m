@@ -6,7 +6,8 @@ function [rxWaveform, truth, trace] = run_link(cfg)
 %   truth       for evaluation and genie baselines only:
 %               InfoBits, CodedBits, Code, Grid, H, PAGain, TimingOffset,
 %               NoiseVariance. H is the channel alone; PAGain is the PA's
-%               Bussgang gain g (1 when linear), so the data sees g*H.
+%               Bussgang gain g (1 when linear; F x 1, per subcarrier, for
+%               the memory polynomial PA), so the data sees g.*H.
 %   trace       tx.transmit and chan.propagate outputs (all checkpoints)
 % Random streams, all derived from cfg.Seed and independent of each other:
 %   bits         mt19937ar, seed cfg.Seed

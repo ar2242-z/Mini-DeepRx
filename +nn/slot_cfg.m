@@ -11,6 +11,6 @@ cfg.ChannelModel = char(row.ChannelModel);
 cfg.SIRdB = row.SIRdB;
 cfg.PABackoffdB = row.PABackoffdB;
 if row.PAIndex > 0
-    cfg.PACoefficients = row.PACoefficients{1}; % This slot's PA from the bank.
+    cfg = nn.use_pa(cfg, row.PACoefficients{1}); % This slot's PA from the bank.
 end
 end

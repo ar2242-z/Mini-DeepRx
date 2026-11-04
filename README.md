@@ -59,9 +59,10 @@ spacing, FFT size 512, 16QAM, one DMRS symbol, code rate 0.5.
 | `tx.map_symbols` | Constellation mapper (digital modulator) | Each group of Q bits (2 for QPSK, 4 for 16QAM) becomes one complex value — the **amplitude and phase** one subcarrier carries for one symbol. 5G Gray mapping, unit average energy, so SNR per resource element is well defined. |
 | `tx.build_grid` | Resource-element mapper | Places data symbols and pilots in the **312 × 14 time–frequency grid**, the frequency-domain picture of the slot. Also returns data and pilot masks. |
 | `tx.ofdm_mod` | OFDM modulator | **IFFT** turns each grid column into 512 time samples (sample rate 512 × 15 kHz = 7.68 MHz; unused bins form the guard band). The **cyclic prefix** (36–40 samples, ≈ 4.7 µs) copies the end of each symbol to its front, so multipath shorter than the CP looks like a per-subcarrier gain, **Y = H·X**, after the receiver's FFT. Output: 7680 complex baseband samples per slot. |
-| `tx.pa` | RF power amplifier | Memoryless non-linear amplifier (Rapp, or a polynomial with optional AM/PM). OFDM has a high peak-to-average power ratio, so peaks are compressed; **back-off** (`PABackoffdB`) sets the average level below saturation. The output is rescaled to the input power, so only distortion is added. `PAGain` is the Bussgang gain (output = gain × input + uncorrelated distortion). `PAModel` `'none'` is a linear PA. |
+| `tx.miniPA` | RF power amplifier (miniPA) | Memoryless non-linear amplifier (Rapp, or a polynomial with optional AM/PM). OFDM has a high peak-to-average power ratio, so peaks are compressed; **back-off** (`PABackoffdB`) sets the average level below saturation. The output is rescaled to the input power, so only distortion is added. `PAGain` is the Bussgang gain (output = gain × input + uncorrelated distortion). `PAModel` `'none'` is a linear PA. |
+| `tx.mppa` | RF power amplifier with memory (`PAModel` `'mp3gpp'`) | The 3GPP TR 38.803 memory polynomial PA (31 GHz CMOS, K = 8, M = 5), run at 4× the sample rate, with **output back-off relative to its 1 dB compression point**. `PAGain` is then one Bussgang gain per subcarrier (F × 1). See [MPPA.md](MPPA.md). |
 | `tx.transmit` | Whole transmitter | Runs the blocks above in order and returns the waveform and every intermediate result. |
-| `tx.bits_per_symbol` | Helper | QPSK → 2, 16QAM → 4. |
+| `tx.bits_per_symbol` | Helper | QPSK → 2, 16QAM → 4, 64QAM → 6. |
 
 Not modelled: data scrambling (TS 38.211 6.3.1.1), transmit windowing, and
 up-conversion to the carrier frequency (all signals are complex baseband).
@@ -73,13 +74,14 @@ up-conversion to the carrier frequency (all signals are complex baseband).
 | `NumResourceBlocks` | 26 | Bandwidth, 12 subcarriers per block |
 | `SubcarrierSpacing` | 15 | kHz |
 | `Nfft` | 512 | FFT size; must exceed 12 × `NumResourceBlocks` |
-| `Modulation` | `'16QAM'` | `'QPSK'` or `'16QAM'` |
+| `Modulation` | `'16QAM'` | `'QPSK'`, `'16QAM'` or `'64QAM'` |
 | `Coding` | `'none'` | `'ldpc'` for 5G UL-SCH coding |
 | `TargetCodeRate` | 0.5 | Information bits / coded bits (LDPC only) |
 | `DMRSTypeAPosition`, `DMRSLength`, `DMRSAdditionalPosition`, `DMRSConfigurationType`, `NumCDMGroupsWithoutData` | 2, 1, 0, 1, 1 | DMRS pilot pattern (TS 38.211 6.4.1.1); default is one pilot symbol at MATLAB column 3 on every 2nd subcarrier |
-| `PAModel` | `'none'` | `'none'`, `'rapp'` or `'polynomial'` |
-| `PABackoffdB` | 6 | Average power below PA saturation, dB |
-| `RappSmoothness`, `PACoefficients` | 2, `[1 -1/3]` | PA model parameters |
+| `PAModel` | `'none'` | `'none'`, `'rapp'` or `'polynomial'` (miniPA), `'mp3gpp'` (memory polynomial, [MPPA.md](MPPA.md)) |
+| `PABackoffdB` | 6 | miniPA: input RMS below PA saturation, dB. `'mp3gpp'`: mean output power below the output power at P1dB, dB |
+| `RappSmoothness`, `PACoefficients` | 2, `[1 -1/3]` | miniPA parameters |
+| `MPCoefficients`, `PAOversampling` | `[]`, 4 | `'mp3gpp'` parameters: normalized K × M coefficients as a row (`[]` = nominal 3GPP PA), oversampling of the PA |
 | `Seed` | 42 | Random seed for the slot |
 
 ```matlab
@@ -345,6 +347,17 @@ train_fcnn(args{:}, 'Name', 'fcnn_pa')          % FCNN under PA distortion, ~3 h
 Bank settings in `nn_config`: `PADither` (0.1; 0 uses the Link's PA for every slot),
 `NumTrainingPAs` (30), `NumValidationPAs` (10), `PASeed` (2023). Without a polynomial PA,
 plans and training are exactly as before.
+
+The 3GPP memory polynomial PA (`'mp3gpp'`) has its own bank and shared settings,
+`experiments/mppa_common.m`: the paper's numerology (60 kHz, 1024-point FFT, 792 subcarriers,
+64QAM), output back-off −1 to 7 dB relative to P1dB, dither 0.05 of the static curve. See
+[MPPA.md](MPPA.md); `plot_mppa` draws the paper's Fig. 4 for it.
+
+```matlab
+addpath experiments
+args = mppa_common;
+train_receiver(args{:}, 'Flow', 'ftf', 'Name', 'ftf_mppa')
+```
 
 ### TCNN and hybrid flows
 
@@ -645,6 +658,7 @@ test_nn          % neural-receiver pipeline checks (about 1 min with a GPU)
 test_tcnn        % TCNN flows (CPU only, so it can run beside a GPU training)
 test_ftf         % frequency-domain hybrid: transforms, parameters, gradients, training (CPU, ~6 min)
 test_train       % training options: schedule, clipping, Resume, range test (CPU only)
+test_mppa        % 3GPP memory polynomial PA and 64QAM (see MPPA.md)
 ```
 
 `test_chan` checks the channel against the earlier code (identical timing, `H`, noiseless and

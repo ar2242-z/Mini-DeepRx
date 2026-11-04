@@ -8,7 +8,8 @@ function plan = plan_slots(ncfg, roots, slotsPerRoot, epochs, excluded, pas)
 %   pas (optional, from nn.pa_bank): one PA per row; each slot draws one.
 %   plan: table with Epoch, MasterSeed, Seed, SNRdB, DopplerHz, DelaySpread,
 %   ChannelModel, PilotIndex, SIRdB, PABackoffdB, PAIndex, PACoefficients
-%   (PAIndex 0 and empty coefficients: the Link's own PA). Pass a
+%   (PAIndex 0 and empty coefficients: the Link's own PA; for 'mp3gpp' the
+%   column holds the bank's MPCoefficients rows, see nn.use_pa). Pass a
 %   validation plan's seeds as excluded for training, so the sets never
 %   share a slot.
 if nargin < 6

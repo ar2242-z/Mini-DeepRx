@@ -21,10 +21,12 @@ addParameter(p, 'DopplerRange', [0 500], @(x) range(x) && all(x >= 0));
 addParameter(p, 'DelaySpreadRange', [10e-9 300e-9], @(x) range(x) && all(x > 0));
 addParameter(p, 'SIRRange', [0 36], @(x) isequal(x, [Inf Inf]) || range(x)); % [Inf Inf]: no interferer.
 addParameter(p, 'PABackoffRange', [6 6], range); % Used when the Link sets a PAModel.
-% PA bank (polynomial PA only): each slot draws one of NumTrainingPAs PAs
-% whose coefficients are the Link's PACoefficients plus complex Gaussian
-% dither (PADither x |coefficient|). Validation uses NumValidationPAs other
-% PAs, never seen in training. PADither 0 uses the Link's PA for every slot.
+% PA bank (polynomial miniPA or 'mp3gpp' PA): each slot draws one of
+% NumTrainingPAs PAs. Polynomial: the Link's PACoefficients plus complex
+% Gaussian dither (PADither x |coefficient|). 'mp3gpp': the static curve
+% dithered in an orthonormal basis (nn.pa_bank, MPPA.md). Validation uses
+% NumValidationPAs other PAs, never seen in training. PADither 0 uses the
+% Link's PA for every slot.
 addParameter(p, 'PADither', 0.1, @(x) isscalar(x) && isreal(x) && x >= 0);
 addParameter(p, 'NumTrainingPAs', 30, count);
 addParameter(p, 'NumValidationPAs', 10, count);

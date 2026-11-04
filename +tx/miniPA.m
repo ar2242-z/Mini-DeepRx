@@ -1,9 +1,10 @@
-function [y, gain] = pa(x, cfg)
-%PA Memoryless transmit power amplifier on the time waveform.
-%   [y, gain] = tx.pa(x, cfg) uses cfg.PAModel, PABackoffdB, RappSmoothness
-%   and PACoefficients. The input is scaled so its RMS sits
-% PABackoffdB below the saturation amplitude (1). The output is scaled back
-% to the input RMS, so SNRdB keeps its meaning and only distortion is added.
+function [y, gain] = miniPA(x, cfg)
+%MINIPA Memoryless transmit power amplifier (miniPA) on the time waveform.
+%   [y, gain] = tx.miniPA(x, cfg) uses cfg.PAModel ('rapp' or 'polynomial'),
+%   PABackoffdB, RappSmoothness and PACoefficients. The input is scaled so
+%   its RMS sits PABackoffdB below the saturation amplitude (1). The output
+%   is scaled back to the input RMS, so SNRdB keeps its meaning and only
+%   distortion is added. The 3GPP memory polynomial PA is tx.mppa.
 gain = 1;
 if strcmp(cfg.PAModel,'none')
     y = x;

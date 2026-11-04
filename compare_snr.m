@@ -24,7 +24,7 @@ function results = compare_snr(models, varargin)
 %            from the FIRST model's link (LinkConfig), e.g. PA model and
 %            back-off, Doppler, delay spread, channel model, SIR; Coding is
 %            always 'ldpc' (for BLER).
-%   'UsePABank'  with a polynomial PA, cycle through the unseen validation
+%   'UsePABank'  with a polynomial or 'mp3gpp' PA, cycle through the unseen validation
 %            PAs saved in the models (model.PABank), so no model is tested
 %            on a PA it trained on (default true)
 %   'Labels' legend names (default: the model names)
@@ -74,7 +74,7 @@ end
 
 % PAs: the unseen validation PAs of the first model that has a bank.
 pas = [];
-if opt.UsePABank && strcmp(base.PAModel, 'polynomial')
+if opt.UsePABank && any(strcmp(base.PAModel, {'polynomial','mp3gpp'}))
     for k = 1:numel(loaded)
         if isfield(loaded{k}, 'PABank') && ~isempty(loaded{k}.PABank.Validation)
             pas = loaded{k}.PABank.Validation; break;
@@ -99,7 +99,7 @@ for i = 1:S
         cfg.SNRdB = snrs(i);
         cfg.Seed = opt.Seed + n - 1;
         if ~isempty(pas)
-            cfg.PACoefficients = pas(mod(n - 1, size(pas, 1)) + 1, :);
+            cfg = nn.use_pa(cfg, pas(mod(n - 1, size(pas, 1)) + 1, :));
         end
         [w, truth] = run_link(cfg);
         llrs = cell(1, R);
@@ -209,6 +209,9 @@ function text = describe(cfg, pas)
     pa = 'no PA';
     if ~strcmp(cfg.PAModel, 'none')
         pa = sprintf('%s PA at %g dB back-off', cfg.PAModel, cfg.PABackoffdB);
+        if strcmp(cfg.PAModel, 'mp3gpp')
+            pa = sprintf('%s PA at %g dB output back-off wrt. P1dB', cfg.PAModel, cfg.PABackoffdB);
+        end
         if ~isempty(pas), pa = sprintf('%s (%d unseen PAs)', pa, size(pas, 1)); end
     end
     sir = 'no interferer';

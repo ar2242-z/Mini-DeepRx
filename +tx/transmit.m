@@ -12,7 +12,9 @@ function [waveform, out] = transmit(cfg, stream, cellID)
 %     Symbols, Grid        data symbols and the full resource grid
 %     DataMask, PilotMask  logical masks of the grid
 %     WaveformBeforePA     OFDM waveform before the PA
-%     PAGain               Bussgang gain of the PA (1 when linear)
+%     PAGain               Bussgang gain of the PA (1 when linear): a scalar
+%                          for the memoryless miniPA, F x 1 (one gain per
+%                          subcarrier) for the memory polynomial 'mp3gpp'
 % With Coding 'none' the random draws match mini_simo_channel exactly.
 if nargin < 3
     cellID = 0;
@@ -35,7 +37,11 @@ end
 symbols = tx.map_symbols(codedBits, cfg.Modulation);
 [grid, dataMask, pilotMask] = tx.build_grid(carrier, res, symbols);
 beforePA = tx.ofdm_mod(carrier, grid, cfg.Nfft);
-[waveform, paGain] = tx.pa(beforePA, cfg);
+if strcmp(cfg.PAModel, 'mp3gpp')
+    [waveform, paGain] = tx.mppa(beforePA, carrier, cfg);
+else
+    [waveform, paGain] = tx.miniPA(beforePA, cfg);
+end
 
 out.Carrier = carrier;
 out.Resources = res;
