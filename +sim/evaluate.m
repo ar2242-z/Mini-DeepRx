@@ -1,7 +1,7 @@
 function result = evaluate(llr, truth, cfg)
 %EVALUATE Error counts for one slot from the receiver's LLRs.
-%   result = evaluate(llr, truth, cfg), llr from any receiver (log P(0)/P(1),
-%   transmit bit order), truth from run_link.
+%   result = sim.evaluate(llr, truth, cfg), llr from any receiver (log P(0)/P(1),
+%   transmit bit order), truth from sim.run_link.
 %   Uncoded: hard decisions (llr < 0 means bit 1) against the bits on the
 %   grid. Coded (cfg.Coding 'ldpc'): LDPC decoding, then the transport block
 %   against the information bits, and the CRC for block errors.

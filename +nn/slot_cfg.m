@@ -2,7 +2,7 @@ function cfg = slot_cfg(baseCfg, ncfg, row)
 %SLOT_CFG Link configuration of one planned slot.
 %   cfg = nn.slot_cfg(baseCfg, ncfg, row) applies the pilot layout and the
 %   conditions of one nn.plan_slots row to the base link configuration.
-cfg = slot_config(baseCfg, ncfg.PilotConfigs(row.PilotIndex));
+cfg = sim.override(baseCfg, ncfg.PilotConfigs(row.PilotIndex));
 cfg.Seed = row.Seed;
 cfg.SNRdB = row.SNRdB;
 cfg.MaximumDopplerShift = row.DopplerHz;

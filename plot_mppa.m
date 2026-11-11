@@ -33,8 +33,7 @@ root = fileparts(mfilename('fullpath'));
 addpath(fullfile(root, 'experiments'));
 
 args = mppa_common();
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
-base = simo_config(quiet{:}, args{2}{:}, 'SNRdB', Inf);
+base = simo_config(args{2}{:}, 'SNRdB', Inf);
 bank = nn.pa_bank(base, nn_config(args{:}));
 nominal = tx.mppa_nominal();
 pas = [nominal.B(:).'; bank.Validation];     % Row 1: nominal.

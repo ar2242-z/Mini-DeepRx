@@ -11,7 +11,7 @@ function [llr, trace] = receive(rxWaveform, ctx, model)
 %   Uses only rxWaveform and ctx, never the truth. ctx must have the pilot
 %   layout and link the model was trained for.
 %   model: saved by train_receiver (Flow, Nets). llr: (Q*D) x 1,
-%   log P(0)/P(1), ready for evaluate / rx.ldpc_decode.
+%   log P(0)/P(1), ready for sim.evaluate / rx.ldpc_decode.
 assert(isfield(model, 'Flow') && isfield(model, 'Nets'), ...
     'The model has no Flow and Nets; it is not from train_receiver.');
 flow = nn.flow(model.Flow);

@@ -1,7 +1,7 @@
 function passed = test_nn()
 %% Check the neural receiver pipeline (+nn) before any long training
 % Run: test_nn
-% 1. Oracle round trip: nn.labels -> perfect logits -> nn.to_llr -> evaluate
+% 1. Oracle round trip: nn.labels -> perfect logits -> nn.to_llr -> sim.evaluate
 %    gives zero bit errors and a passing CRC (bit order and LLR sign).
 % 2. nn.bce_loss gradient equals sigmoid(s) - t, also at s = 0 and masked.
 % 3. nn.fcnn builds the paper's network (Table I, 1,234,436 parameters),
@@ -12,27 +12,26 @@ function passed = test_nn()
 % 5. The trained FCNN (models/fcnn.mat) runs through nn.receive and beats
 %    the conventional receiver on new slots (TDL-C, 20 dB, 100 Hz).
 
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 passed = true;
 
 %% 1. Oracle round trip
 fprintf('1. Labels -> oracle logits -> LLRs -> LDPC decoding\n');
 cases = {{'Coding','ldpc'}, {'Coding','ldpc','Modulation','QPSK','DMRSAdditionalPosition',1}};
 for k = 1:numel(cases)
-    cfg = simo_config(quiet{:},cases{k}{:},'SNRdB',Inf);
+    cfg = simo_config(cases{k}{:},'SNRdB',Inf);
     ctx = rx.context(cfg);
-    [~,truth] = run_link(cfg);
+    [~,truth] = sim.run_link(cfg);
     [planes,mask] = nn.labels(truth.CodedBits,ctx);
     logits = 10*(2*planes-1);              % Confident and correct.
     llr = nn.to_llr(logits,ctx);
-    r = evaluate(llr,truth,cfg);
+    r = sim.evaluate(llr,truth,cfg);
     ok = r.UncodedErrors==0 && r.CodedErrors==0 && r.BlockError==0 && ...
         all(sign(llr) == 1-2*truth.CodedBits) && nnz(mask)==numel(truth.CodedBits);
     passed = report(ok,sprintf('%-5s %d DMRS symbol(s): 0 errors, CRC passes, LLR > 0 means bit 0', ...
         cfg.Modulation,numel(ctx.PilotCols))) && passed;
 end
 cfg2 = cfg; cfg2.Seed = 3;
-[~,truth2] = run_link(cfg2);
+[~,truth2] = sim.run_link(cfg2);
 planes2 = nn.labels([truth.CodedBits truth2.CodedBits],ctx);
 llr2 = nn.to_llr(10*(2*planes2-1),ctx);
 passed = report(isequal(sign(llr2),1-2*[truth.CodedBits truth2.CodedBits]), ...
@@ -49,14 +48,14 @@ passed = report(isfinite(extractdata(value)) && err<1e-6, ...
     sprintf('2. BCE gradient equals (sigmoid(s)-t)*mask/N (max error %.1e)',err)) && passed;
 
 %% 3. The paper's network, and gradients back to the received samples
-cfg = simo_config(quiet{:},'Coding','ldpc','SNRdB',15);
+cfg = simo_config('Coding','ldpc','SNRdB',15);
 ctx = rx.context(cfg);
 inputSize = [ctx.NumSubcarriers ctx.NumSymbols 2*(2*cfg.NumReceiveAntennas+1)];
 rng(7,'twister');
 net = nn.fcnn(inputSize,ctx.BitsPerSymbol);
 numParams = sum(cellfun(@numel,net.Learnables.Value));
 tableIParams = 1234436;
-[rxWaveform,truth] = run_link(cfg);
+[rxWaveform,truth] = sim.run_link(cfg);
 [planes,mask] = nn.labels(truth.CodedBits,ctx);
 batch.Slots = dlarray(single(rx.sync(rxWaveform,ctx)));
 batch.PilotGrid = ctx.PilotGrid;
@@ -77,14 +76,14 @@ ncfg = nn_config('Link',{'Coding','ldpc'},'SNRRange',[20 20],'DopplerRange',[100
     'Dilations',[1 1;3 3;6 6;3 3;1 1],'Verbose',false);
 % The dilations give a reach of about 21 OFDM symbols, so every data symbol
 % can see the single pilot symbol (column 3); fewer blocks cannot.
-baseCfg = simo_config(quiet{:},ncfg.Link{:});
+baseCfg = simo_config(ncfg.Link{:});
 plan = nn.plan_slots(ncfg,77,8,1,[]);
 data = nn.make_data(baseCfg,ncfg,plan,true);
 ls = 0;
 for k = 1:8
     c = nn.slot_cfg(baseCfg,ncfg,plan(k,:));
-    [w,tr] = run_link(c);
-    r = evaluate(rx.receive(w,rx.context(c),'conventional'),tr,c);
+    [w,tr] = sim.run_link(c);
+    r = sim.evaluate(rx.receive(w,rx.context(c),'conventional'),tr,c);
     ls = ls + r.UncodedErrors/r.UncodedBits/8;
 end
 rng(ncfg.InitializationSeed,'twister');
@@ -105,11 +104,11 @@ saved = load(fullfile(fileparts(mfilename('fullpath')),'models','fcnn.mat'),'mod
 model = saved.model;
 counts = zeros(2,3);
 for seed = 5001:5020
-    cfg = simo_config(quiet{:},'Coding','ldpc','SNRdB',20,'MaximumDopplerShift',100,'Seed',seed);
+    cfg = simo_config('Coding','ldpc','SNRdB',20,'MaximumDopplerShift',100,'Seed',seed);
     ctx = rx.context(cfg);
-    [rxWaveform,truth] = run_link(cfg);
-    rFCNN = evaluate(nn.receive(rxWaveform,ctx,model),truth,cfg);
-    rLS = evaluate(rx.receive(rxWaveform,ctx,'conventional'),truth,cfg);
+    [rxWaveform,truth] = sim.run_link(cfg);
+    rFCNN = sim.evaluate(nn.receive(rxWaveform,ctx,model),truth,cfg);
+    rLS = sim.evaluate(rx.receive(rxWaveform,ctx,'conventional'),truth,cfg);
     counts(1,:) = counts(1,:) + [rFCNN.UncodedErrors rFCNN.UncodedBits rFCNN.BlockError];
     counts(2,:) = counts(2,:) + [rLS.UncodedErrors rLS.UncodedBits rLS.BlockError];
 end

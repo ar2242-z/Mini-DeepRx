@@ -16,10 +16,9 @@ function passed = test_mppa()
 % 7. Link: LMMSE with the true channel (times the PA gain) decodes the
 %    64QAM LDPC slot through the PA and a TDL-C channel.
 passed = true;
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 addpath(fullfile(fileparts(mfilename('fullpath')), 'experiments'));
 args = mppa_common();
-base = simo_config(quiet{:}, args{2}{:}, 'SNRdB', Inf);
+base = simo_config(args{2}{:}, 'SNRdB', Inf);
 
 %% 1. Nominal PA against the TR model
 fprintf('1. Nominal PA versus the TR 38.803 memory polynomial\n');
@@ -115,12 +114,12 @@ passed = report(ok, sprintf('max |difference| %.2e against nrSymbolDemodulate', 
 
 %% 7. Link through the PA and a channel
 fprintf('7. 64QAM LDPC link through the MP PA (4 dB back-off), TDL-C, 35 dB SNR\n');
-cfg = simo_config(quiet{:}, args{2}{:}, 'PABackoffdB', 4, 'SNRdB', 35, 'Seed', 21);
-[w, truth] = run_link(cfg);
+cfg = simo_config(args{2}{:}, 'PABackoffdB', 4, 'SNRdB', 35, 'Seed', 21);
+[w, truth] = sim.run_link(cfg);
 ctx = rx.context(cfg);
-e1 = evaluate(rx.receive(w, ctx, 'knownH', truth), truth, cfg);
+e1 = sim.evaluate(rx.receive(w, ctx, 'knownH', truth), truth, cfg);
 noGain = rmfield(truth, 'PAGain');
-e2 = evaluate(rx.receive(w, ctx, 'knownH', noGain), truth, cfg);
+e2 = sim.evaluate(rx.receive(w, ctx, 'knownH', noGain), truth, cfg);
 ok = ~e1.BlockError && e1.UncodedErrors/e1.UncodedBits < e2.UncodedErrors/e2.UncodedBits;
 passed = report(ok, sprintf('known H x PA gain: BER %.4f, CRC %s; known H alone: BER %.4f', ...
     e1.UncodedErrors/e1.UncodedBits, string(~e1.BlockError), e2.UncodedErrors/e2.UncodedBits)) && passed;

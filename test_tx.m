@@ -9,7 +9,6 @@ function passed = test_tx()
 % Step 2 uses 5G Toolbox stand-ins (nrOFDMDemodulate, nrSymbolDemodulate)
 % for receiver blocks that do not exist yet.
 
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 passed = true;
 
 %% 1. LDPC encoder against nrULSCH
@@ -21,7 +20,7 @@ cases = {
     '16QAM R=0.80 106 RB (C>1)',{'TargetCodeRate',0.8,'NumResourceBlocks',106,'Nfft',2048}
     };
 for k = 1:size(cases,1)
-    cfg = simo_config(quiet{:},'Coding','ldpc',cases{k,2}{:});
+    cfg = simo_config('Coding','ldpc',cases{k,2}{:});
     [~,out] = tx.transmit(cfg,RandStream('mt19937ar','Seed',k));
     ulsch = nrULSCH('TargetCodeRate',cfg.TargetCodeRate);
     setTransportBlock(ulsch,out.InfoBits);
@@ -33,7 +32,7 @@ end
 
 %% 2. Coded loopback over AWGN on the grid
 fprintf('2. Loopback: Tx -> OFDM demod -> AWGN -> soft demap -> LDPC decode\n');
-cfg = simo_config(quiet{:},'Coding','ldpc');
+cfg = simo_config('Coding','ldpc');
 [waveform,out] = tx.transmit(cfg,RandStream('mt19937ar','Seed',1));
 grid = nrOFDMDemodulate(out.Carrier,waveform,'Nfft',cfg.Nfft);
 llr = nrSymbolDemodulate(grid(out.DataMask),cfg.Modulation,1e-3);

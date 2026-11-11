@@ -1,7 +1,7 @@
 function data = make_data(baseCfg, ncfg, plan, keepTruth)
 %MAKE_DATA Simulate the slots of a plan and keep what training needs.
 %   data = nn.make_data(baseCfg, ncfg, plan, keepTruth)
-%   For each plan row: run_link (Tx + channel), then rx.sync with the
+%   For each plan row: sim.run_link (Tx + channel), then rx.sync with the
 %   receiver's own timing (cfg.TimingEstimation). Storing the synced time
 %   samples serves every receiver: FCNN applies the FFT, TCNN works before it.
 %   data fields (S = number of slots):
@@ -16,7 +16,7 @@ if nargin < 4
     keepTruth = false;
 end
 for k = 1:numel(ncfg.PilotConfigs)
-    contexts(k, 1) = rx.context(slot_config(baseCfg, ncfg.PilotConfigs(k))); %#ok<AGROW>
+    contexts(k, 1) = rx.context(sim.override(baseCfg, ncfg.PilotConfigs(k))); %#ok<AGROW>
 end
 c = contexts(1);
 S = height(plan);
@@ -32,7 +32,7 @@ truth = struct('InfoBits', cell(S, 1), 'CodedBits', [], 'Code', []);
 for s = 1:S
     cfg = nn.slot_cfg(baseCfg, ncfg, plan(s, :));
     ctx = contexts(plan.PilotIndex(s));
-    [rxWaveform, t] = run_link(cfg);
+    [rxWaveform, t] = sim.run_link(cfg);
     data.Slots(:, :, s) = rx.sync(rxWaveform, ctx, t.TimingOffset);
     data.PilotGrid(:, :, 1, s) = ctx.PilotGrid;
     [data.Labels(:, :, :, s), data.Mask(:, :, :, s)] = nn.labels(t.CodedBits, ctx);

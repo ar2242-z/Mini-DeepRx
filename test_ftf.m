@@ -14,13 +14,12 @@ function passed = test_ftf()
 %    well as an FCNN with the same blocks, slots and steps.
 % 5. train_receiver trains, saves and resumes the flow; nn.receive equals
 %    the training forward pass.
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 passed = true;
 pa = {'Coding','ldpc','PAModel','polynomial','PACoefficients',[1 -1/3]};
 root = fileparts(mfilename('fullpath'));
 
 %% 1. Pseudo-time transform
-cfg = simo_config(quiet{:},pa{:},'PABackoffdB',3,'SNRdB',20,'Seed',11);
+cfg = simo_config(pa{:},'PABackoffdB',3,'SNRdB',20,'Seed',11);
 ctx = rx.context(cfg);
 A = nn.pseudo_time_basis(ctx,ctx.Nfft);
 errI = max(abs(A'*A - eye(ctx.NumSubcarriers)),[],'all');
@@ -56,7 +55,7 @@ passed = report(same && nFCNN == 1234436 && sum(counts) == nFCNN, sprintf( ...
     nFCNN,counts,sum(counts))) && passed;
 
 %% 3. Forward shape and gradients
-[rxWaveform,truth] = run_link(cfg);
+[rxWaveform,truth] = sim.run_link(cfg);
 [planes,mask] = nn.labels(truth.CodedBits,ctx);
 batch.Slots = dlarray(single(rx.sync(rxWaveform,ctx)));
 batch.PilotGrid = ctx.PilotGrid; batch.Labels = dlarray(planes); batch.Mask = dlarray(single(mask));
@@ -76,7 +75,7 @@ ncfg = nn_config('Link',pa,'SNRRange',[25 25],'DopplerRange',[100 100], ...
     'DelaySpreadRange',[300e-9 300e-9],'SIRRange',[Inf Inf],'PABackoffRange',[0 0], ...
     'MaxEpochs',250,'MiniBatchSize',4,'LearningRate',3e-3,'Widths',widths,'Dilations',dilations, ...
     'FTFSplit',[3 2 2],'ExecutionEnvironment','cpu','Verbose',false);
-baseCfg = simo_config(quiet{:},ncfg.Link{:});
+baseCfg = simo_config(ncfg.Link{:});
 bank = nn.pa_bank(baseCfg,ncfg);
 plan = nn.plan_slots(ncfg,77,8,1,[],bank.Training);
 data = nn.make_data(baseCfg,ncfg,plan,true);

@@ -30,13 +30,12 @@ function [model, history] = train_receiver(varargin)
 % The model is used with nn.receive(rxWaveform, rx.context(cfg), model).
 ncfg = nn_config(varargin{:});
 flow = nn.flow(ncfg.Flow);
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
-baseCfg = simo_config(quiet{:}, ncfg.Link{:});
+baseCfg = simo_config(ncfg.Link{:});
 ctx = rx.context(baseCfg);
 if flow.SinglePilotLayout
     % The conventional blocks take the pilot layout from ctx.
     assert(isscalar(ncfg.PilotConfigs), 'Flow %s needs a single PilotConfig.', flow.Name);
-    ctx = rx.context(slot_config(baseCfg, ncfg.PilotConfigs));
+    ctx = rx.context(sim.override(baseCfg, ncfg.PilotConfigs));
 end
 
 % 1-2. Slots: validation first, so training can exclude its seeds.

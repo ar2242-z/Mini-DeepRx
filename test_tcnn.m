@@ -15,21 +15,20 @@ function passed = test_tcnn()
 % 6. LLR calibration under mixed conditions: with the calibration learned
 %    alongside, the TCNN lowers the loss without raising the BER.
 
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 passed = true;
 pa = {'Coding','ldpc','PAModel','polynomial','PACoefficients',[1 -1/3]};
 
 %% 1. Untrained tcnn_feq equals the conventional receiver
-cfg = simo_config(quiet{:},pa{:},'PABackoffdB',3,'SNRdB',20,'Seed',11);
+cfg = simo_config(pa{:},'PABackoffdB',3,'SNRdB',20,'Seed',11);
 ctx = rx.context(cfg);
 rng(7,'twister');
 model = struct('Flow','tcnn_feq','TCNNInputSize',[ctx.SlotLength 1 2*ctx.NumReceiveAntennas]);
 model.Nets.tcnn = nn.tcnn(model.TCNNInputSize);
-[rxWaveform,truth] = run_link(cfg);
+[rxWaveform,truth] = sim.run_link(cfg);
 llrT = nn.receive(rxWaveform,ctx,model);
 llrLS = rx.receive(rxWaveform,ctx,'conventional');
 err = max(abs(llrT-llrLS))/max(abs(llrLS));
-rT = evaluate(llrT,truth,cfg); rLS = evaluate(llrLS,truth,cfg);
+rT = sim.evaluate(llrT,truth,cfg); rLS = sim.evaluate(llrLS,truth,cfg);
 passed = report(err < 1e-4 && rT.UncodedErrors == rLS.UncodedErrors, sprintf( ...
     '1. untrained TCNN + conventional = conventional (LLR error %.1e of max; %d = %d bit errors)', ...
     err,rT.UncodedErrors,rLS.UncodedErrors)) && passed;
@@ -57,7 +56,7 @@ ncfg = nn_config('Link',pa,'SNRRange',[25 25],'DopplerRange',[100 100], ...
     'DelaySpreadRange',[300e-9 300e-9],'SIRRange',[Inf Inf],'PABackoffRange',[0 0], ...
     'MaxEpochs',150,'MiniBatchSize',4,'LearningRate',3e-3,'TCNNWidths',[32 32 32], ...
     'TCNNDilations',[1 2 1],'ExecutionEnvironment','cpu','Verbose',false);
-baseCfg = simo_config(quiet{:},ncfg.Link{:});
+baseCfg = simo_config(ncfg.Link{:});
 bank = nn.pa_bank(baseCfg,ncfg);
 plan = nn.plan_slots(ncfg,77,8,1,[],bank.Training);
 data = nn.make_data(baseCfg,ncfg,plan,true);
@@ -77,12 +76,12 @@ passed = report(ok,'loss and BER at least 20% below the conventional receiver on
 %% 4. nn.receive equals the training forward pass
 model = struct('Flow','tcnn_feq','Nets',best.Params,'TCNNInputSize',[ctx.SlotLength 1 2*ctx.NumReceiveAntennas]);
 c = nn.slot_cfg(baseCfg,ncfg,plan(1,:));
-[w,t] = run_link(c);
+[w,t] = sim.run_link(c);
 llrR = nn.receive(w,ctx,model);
 b1.Slots = dlarray(data.Slots(:,:,1)); b1.PilotGrid = data.PilotGrid(:,:,:,1);
 llrF = nn.to_llr(extractdata(forward(best.Params,b1,false)),ctx);
 err = max(abs(llrR-double(llrF)))/max(abs(llrF));
-rR = evaluate(llrR,t,c);
+rR = sim.evaluate(llrR,t,c);
 passed = report(err < 1e-4,sprintf('4. nn.receive = training forward pass (error %.1e); this slot BER %.4f', ...
     err,rR.UncodedErrors/rR.UncodedBits)) && passed;
 
@@ -90,16 +89,16 @@ passed = report(err < 1e-4,sprintf('4. nn.receive = training forward pass (error
 root = fileparts(mfilename('fullpath'));
 trained = load(fullfile(root,'models','fcnn.mat'),'model');
 fcnnModel = trained.model;
-cfg = simo_config(quiet{:},'Coding','ldpc','SNRdB',20,'Seed',5001);
+cfg = simo_config('Coding','ldpc','SNRdB',20,'Seed',5001);
 ctx = rx.context(cfg);
-[rxWaveform,truth] = run_link(cfg);
+[rxWaveform,truth] = sim.run_link(cfg);
 rng(7,'twister');
 hybrid = struct('Flow','tcnn_fcnn','TCNNInputSize',[ctx.SlotLength 1 2*ctx.NumReceiveAntennas]);
 hybrid.Nets = struct('tcnn',nn.tcnn(hybrid.TCNNInputSize),'fcnn',fcnnModel.Nets.fcnn);
 llrH = nn.receive(rxWaveform,ctx,hybrid);
 llrF = nn.receive(rxWaveform,ctx,fcnnModel);
 err = max(abs(llrH-llrF))/max(abs(llrF));
-rH = evaluate(llrH,truth,cfg); rF = evaluate(llrF,truth,cfg);
+rH = sim.evaluate(llrH,truth,cfg); rF = sim.evaluate(llrF,truth,cfg);
 passed = report(err < 1e-3 && abs(rH.UncodedErrors-rF.UncodedErrors) <= 2, sprintf( ...
     '5. untrained TCNN + FCNN = FCNN (LLR error %.1e of max; %d vs %d bit errors)', ...
     err,rH.UncodedErrors,rF.UncodedErrors)) && passed;
@@ -128,7 +127,7 @@ fprintf('6. Mixed conditions, 32 training / 16 validation slots, small TCNN, 15 
 ncfg = nn_config('Link',pa,'SIRRange',[Inf Inf],'PABackoffRange',[0 10],'MaxEpochs',15, ...
     'MiniBatchSize',4,'LearningRate',3e-3,'TCNNWidths',[16 16 16],'TCNNDilations',[1 2 1], ...
     'ExecutionEnvironment','cpu','Verbose',false);
-baseCfg = simo_config(quiet{:},ncfg.Link{:});
+baseCfg = simo_config(ncfg.Link{:});
 ctx = rx.context(baseCfg);
 bank = nn.pa_bank(baseCfg,ncfg);
 trainPlan = nn.plan_slots(ncfg,501,32,1,[],bank.Training);

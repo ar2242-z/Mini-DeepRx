@@ -9,14 +9,13 @@ function passed = test_chan()
 % The FFT here is nrOFDMDemodulate on the slot window found with the
 % genie timing offset, standing in for rx.sync and rx.ofdm_demod.
 
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 passed = true;
 
 %% 1. Static channel gives Y = H.*X; Doppler adds intercarrier interference
 fprintf('1. Received grid versus H.*X (no noise, no PA)\n');
 models = {'TDL-C',0;'CDL-D',0;'TDL-C',100;'TDL-C',500};
 for k = 1:size(models,1)
-    cfg = simo_config(quiet{:},'ChannelModel',models{k,1},'MaximumDopplerShift',models{k,2}, ...
+    cfg = simo_config('ChannelModel',models{k,1},'MaximumDopplerShift',models{k,2}, ...
         'DelaySpread',30e-9,'SNRdB',Inf);
     [waveform,txOut] = tx.transmit(cfg,RandStream('mt19937ar','Seed',5));
     [~,ch] = chan.propagate(waveform,txOut.Carrier,cfg,RandStream('mt19937ar','Seed',1));
@@ -33,7 +32,7 @@ end
 %% 2. Average channel power
 fprintf('2. Average channel power over 100 realizations\n');
 for model = {'TDL-A','TDL-C','TDL-E','CDL-A','CDL-C','CDL-D'}
-    cfg = simo_config(quiet{:},'ChannelModel',model{1},'SNRdB',Inf);
+    cfg = simo_config('ChannelModel',model{1},'SNRdB',Inf);
     [waveform,txOut] = tx.transmit(cfg,RandStream('mt19937ar','Seed',1));
     power = zeros(100,1);
     for seed = 1:100
@@ -49,7 +48,7 @@ end
 
 %% 3. Measured SIR and SNR per occupied resource element
 fprintf('3. Measured SIR and SNR, averaged over 40 slots\n');
-cfg = simo_config(quiet{:},'SIRdB',6,'SNRdB',10);
+cfg = simo_config('SIRdB',6,'SNRdB',10);
 sig = 0; intf = 0; noise = 0;
 noiseStream = RandStream('mt19937ar','Seed',3);
 for seed = 1:40
@@ -68,7 +67,7 @@ passed = report(abs(sirdB-cfg.SIRdB)<1,sprintf('SIR %.2f dB (set %g)',sirdB,cfg.
 passed = report(abs(snrdB-cfg.SNRdB)<1,sprintf('SNR %.2f dB (set %g)',snrdB,cfg.SNRdB)) && passed;
 
 %% 4. Interference does not change the wanted signal
-cfg = simo_config(quiet{:},'SIRdB',Inf,'SNRdB',Inf);
+cfg = simo_config('SIRdB',Inf,'SNRdB',Inf);
 [waveform,txOut] = tx.transmit(cfg,RandStream('mt19937ar','Seed',9));
 [~,clean] = chan.propagate(waveform,txOut.Carrier,cfg,RandStream('mt19937ar','Seed',1));
 cfg.SIRdB = 0;

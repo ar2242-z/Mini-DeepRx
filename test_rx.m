@@ -6,18 +6,17 @@ function passed = test_rx()
 % 3. rx.sync ('dmrs') lands close to the true timing and costs little BER.
 % 4. Every differentiable block gives the same result on dlarray, gradients
 %    reach the received samples, and a batch of slots equals single slots.
-% 5. End to end with LDPC: run_link -> rx.receive -> evaluate, SNR sweep,
+% 5. End to end with LDPC: sim.run_link -> rx.receive -> sim.evaluate, SNR sweep,
 %    the paper's two LMMSE baselines on identical received signals: LS +
 %    linear interpolation, and known H.
 
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 passed = true;
 
 %% 1. OFDM demodulator against nrOFDMDemodulate
 fprintf('1. rx.ofdm_demod versus nrOFDMDemodulate\n');
-cfg = simo_config(quiet{:},'TimingEstimation','perfect');
+cfg = simo_config('TimingEstimation','perfect');
 ctx = rx.context(cfg);
-[rxWaveform,truth] = run_link(cfg);
+[rxWaveform,truth] = sim.run_link(cfg);
 slot = rx.sync(rxWaveform,ctx,truth.TimingOffset);
 err = relErr(rx.ofdm_demod(slot,ctx),nrOFDMDemodulate(ctx.Carrier,slot,'Nfft',cfg.Nfft));
 passed = report(err < 1e-12,sprintf('rx.ofdm_demod versus nrOFDMDemodulate: %.1e',err)) && passed;
@@ -46,8 +45,8 @@ for m = models
     for snr = snrs
         e = zeros(10,1); berEst = 0; berTrue = 0;
         for seed = 1:10
-            cfg = simo_config(quiet{:},'ChannelModel',m{1},'SNRdB',snr,'Seed',seed);
-            [rxWaveform,truth] = run_link(cfg);
+            cfg = simo_config('ChannelModel',m{1},'SNRdB',snr,'Seed',seed);
+            [rxWaveform,truth] = sim.run_link(cfg);
             ctxEst = rx.context(cfg);
             ctxTrue = ctxEst; ctxTrue.TimingEstimation = 'perfect';
             [llrEst,tr] = rx.receive(rxWaveform,ctxEst,'conventional');
@@ -67,9 +66,9 @@ fprintf('        all cases: %d%% exact, max |error| %d samples (FFT window margi
 
 %% 4. dlarray, gradients, and batches
 fprintf('4. Differentiable blocks on dlarray, and batches\n');
-cfg = simo_config(quiet{:},'SNRdB',15);
+cfg = simo_config('SNRdB',15);
 ctx = rx.context(cfg);
-[rxWaveform,truth] = run_link(cfg);
+[rxWaveform,truth] = sim.run_link(cfg);
 slot = rx.sync(rxWaveform,ctx);
 llr = chain(slot,ctx);
 [llrDl,grad] = dlfeval(@chainLoss,dlarray(slot),ctx);
@@ -78,7 +77,7 @@ g = extractdata(grad);
 passed = report(err < 1e-12 && all(isfinite(g(:))) && any(g(:)),sprintf( ...
     'dlarray LLRs equal double (%.1e); gradient w.r.t. samples finite and non-zero',err)) && passed;
 cfg2 = cfg; cfg2.Seed = 7;
-slot2 = rx.sync(run_link(cfg2),ctx);
+slot2 = rx.sync(sim.run_link(cfg2),ctx);
 llrBatch = chain(cat(3,slot,slot2),ctx);
 err = max(relErr(llrBatch(:,1),llr),relErr(llrBatch(:,2),chain(slot2,ctx)));
 passed = report(err < 1e-12,sprintf('batch of 2 slots equals single slots (%.1e)',err)) && passed;
@@ -91,11 +90,11 @@ ber = zeros(numel(snrs),2); bler = ber;
 for i = 1:numel(snrs)
     counts = zeros(2,3);
     for seed = 1:numSlots
-        cfg = simo_config(quiet{:},'Coding','ldpc','SNRdB',snrs(i),'Seed',1000+seed);
+        cfg = simo_config('Coding','ldpc','SNRdB',snrs(i),'Seed',1000+seed);
         ctx = rx.context(cfg);
-        [rxWaveform,truth] = run_link(cfg);
+        [rxWaveform,truth] = sim.run_link(cfg);
         for m = 1:2
-            r = evaluate(rx.receive(rxWaveform,ctx,modes{m},truth),truth,cfg);
+            r = sim.evaluate(rx.receive(rxWaveform,ctx,modes{m},truth),truth,cfg);
             counts(m,:) = counts(m,:) + [r.UncodedErrors r.UncodedBits r.BlockError];
         end
     end

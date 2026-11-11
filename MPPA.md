@@ -27,7 +27,7 @@ The TR lists the 40 coefficients as one vector. **I took it as k-major**: the 5 
 k = 1, then those of k = 2, and so on. With that order the k = 1 taps form a sensible
 linear filter. The other order (m-major) gives a small-signal gain of 1.8·10⁵, which is
 nonsense. The coefficients are typed into `tx.mppa_nominal`, verbatim from
-`3gpp_std/38803-e50.docx`:
+`docs/38803-e50.docx`:
 
 | k | m = 0 | m = 1 | m = 2 | m = 3 | m = 4 |
 |---|---|---|---|---|---|

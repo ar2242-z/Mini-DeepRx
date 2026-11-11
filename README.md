@@ -12,6 +12,7 @@ one function, grouped by where it sits in the chain:
 +chan/  channel            fading → interference → noise
 +rx/    receiver           sync → FFT → channel estimation → equalization → LLRs → LDPC decoding
 +nn/    neural receivers   FCNN (DeepRx), TCNN, hybrids (TCNN/FCNN, FTF-CNN) and training
++sim/   simulation glue    run_link (Tx + channel for one slot), evaluate (BER/BLER), override (config)
 ```
 
 All blocks share one configuration struct from `simo_config.m`. The earlier scripts
@@ -159,9 +160,9 @@ The whole link for one slot:
 ```matlab
 cfg = simo_config('Coding','ldpc','SNRdB',12);
 ctx = rx.context(cfg);                          % what the receiver knows (build once)
-[rxWaveform, truth] = run_link(cfg);            % Tx + channel
+[rxWaveform, truth] = sim.run_link(cfg);            % Tx + channel
 llr = rx.receive(rxWaveform, ctx, 'conventional');
-result = evaluate(llr, truth, cfg)              % uncoded errors, coded errors, block error
+result = sim.evaluate(llr, truth, cfg)              % uncoded errors, coded errors, block error
 ```
 
 **What the receiver may use.** `rx.context(cfg)` holds everything known before a slot arrives,
@@ -196,12 +197,13 @@ project's default is one (`DMRSAdditionalPosition` 0).
 batches (a 4th dimension), and run on `dlarray` with gradients (R2026b). `sync` is not
 differentiable and sits before any learned block.
 
-**Top-level helpers**
+**Simulation helpers (`+sim`)**
 
 | File | What it does |
 |---|---|
-| `run_link.m` | Tx + channel for one slot. Separate random streams from `cfg.Seed`: bits, fading, interferer, noise — so changing the coding never changes the fading or noise. Returns the received waveform, `truth`, and all Tx/channel checkpoints. |
-| `evaluate.m` | Uncoded bit errors (hard decisions on the LLRs), and with LDPC the decoded bit errors and block error (CRC). |
+| `sim.run_link` | Tx + channel for one slot. Separate random streams from `cfg.Seed`: bits, fading, interferer, noise — so changing the coding never changes the fading or noise. Returns the received waveform, `truth`, and all Tx/channel checkpoints. |
+| `sim.evaluate` | Uncoded bit errors (hard decisions on the LLRs), and with LDPC the decoded bit errors and block error (CRC). |
+| `sim.override` | Copies settings onto a configuration and re-validates it with `simo_config` (per-slot pilot layouts, test links from a saved model). |
 
 **Reference performance** (TDL-C, 300 ns, 100 Hz Doppler, 16QAM, LDPC rate 0.5, one DMRS
 symbol, DMRS timing; 30 slots per point):
@@ -315,17 +317,17 @@ about 20 dB before quoting coded gains.
 
 The FCNN replaces channel interpolation, equalization and demapping with one fully
 convolutional network over the time–frequency grid. It shares the receiver front end
-(`rx.sync`, `rx.ofdm_demod`) and the decoder and scoring (`rx.ldpc_decode`, `evaluate`) with
+(`rx.sync`, `rx.ofdm_demod`) and the decoder and scoring (`rx.ldpc_decode`, `sim.evaluate`) with
 the conventional receiver, so all receivers are compared on identical received signals.
 
 ```
-rx.sync → rx.ofdm_demod → nn.deeprx_features → network → nn.to_llr → evaluate / rx.ldpc_decode
+rx.sync → rx.ofdm_demod → nn.deeprx_features → network → nn.to_llr → sim.evaluate / rx.ldpc_decode
 ```
 
 ```matlab
 s = load('models/fcnn.mat');                       % from train_receiver('Flow','fcnn')
 llr = nn.receive(rxWaveform, rx.context(cfg), s.model);
-result = evaluate(llr, truth, cfg);
+result = sim.evaluate(llr, truth, cfg);
 ```
 
 | File | Role |
@@ -337,7 +339,7 @@ result = evaluate(llr, truth, cfg);
 | `nn.bce_loss` | Masked binary cross-entropy from logits (numerically stable; exact gradient σ(s) − t). |
 | `nn.plan_slots`, `nn.slot_cfg` | Conditions per training slot, drawn uniformly from the `nn_config` ranges: SNR, Doppler, delay spread, channel model, pilot layout, SIR, PA back-off, and a PA from the bank. Every slot has a unique seed; training and validation never share one. |
 | `nn.pa_bank` | Training and unseen validation sets of slightly different polynomial PAs (see *Training under PA distortion*). |
-| `nn.make_data` | Simulates planned slots (`run_link` + `rx.sync`) and stores the synced time samples, pilot grids, labels and masks (and the truth for BLER on validation sets). Storing time samples lets FCNN and TCNN use the same data. |
+| `nn.make_data` | Simulates planned slots (`sim.run_link` + `rx.sync`) and stores the synced time samples, pilot grids, labels and masks (and the truth for BLER on validation sets). Storing time samples lets FCNN and TCNN use the same data. |
 | `nn.fcnn_forward` | FFT → features → network, the forward function the training loop calls. |
 | `nn.train` | Generic training loop for every neural receiver: Adam, mini-batches, fresh training slots each epoch, validation loss / BER / BLER each epoch, keeps the best checkpoint. `params` is a struct of networks, so TCNN and hybrids reuse it; networks can be frozen. |
 | `nn.receive` | Runs a saved model's flow; same inputs and outputs as `rx.receive`. Uses only the received samples and `ctx`. |
@@ -389,9 +391,9 @@ polarization note above).
    s = load('models/fcnn.mat');
    cfg = simo_config('Coding','ldpc','SNRdB',20,'Seed',5001);
    ctx = rx.context(cfg);
-   [rxWaveform, truth] = run_link(cfg);
-   rFCNN = evaluate(nn.receive(rxWaveform, ctx, s.model), truth, cfg)
-   rLS   = evaluate(rx.receive(rxWaveform, ctx, 'conventional'), truth, cfg)
+   [rxWaveform, truth] = sim.run_link(cfg);
+   rFCNN = sim.evaluate(nn.receive(rxWaveform, ctx, s.model), truth, cfg)
+   rLS   = sim.evaluate(rx.receive(rxWaveform, ctx, 'conventional'), truth, cfg)
    ```
 
 Run time: the defaults simulate 1000 fresh slots per epoch for 150 epochs; with a GPU an epoch

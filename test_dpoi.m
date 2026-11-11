@@ -19,7 +19,6 @@ function passed = test_dpoi()
 %    does not lose much.
 % 8. compare_snr adds the DPoI baselines.
 passed = true;
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 static = {'MaximumDopplerShift',0};
 poly = {'PAModel','polynomial','PABackoffdB',3};
 mppa = {'SubcarrierSpacing',60,'Nfft',1024,'NumResourceBlocks',66,'Modulation','64QAM', ...
@@ -29,12 +28,12 @@ mppa = {'SubcarrierSpacing',60,'Nfft',1024,'NumResourceBlocks',66,'Modulation','
 fprintf('1. Delay-domain channel smoothing against linear interpolation\n');
 cases = {'no PA', {}; 'polynomial PA, 3 dB back-off', poly; '3GPP MP PA, 3 dB back-off', mppa};
 for c = 1:size(cases, 1)
-    cfg = simo_config(quiet{:}, static{:}, cases{c, 2}{:}, 'SNRdB', 20, 'TimingEstimation', 'perfect');
+    cfg = simo_config(static{:}, cases{c, 2}{:}, 'SNRdB', 20, 'TimingEstimation', 'perfect');
     ctx = rx.context(cfg);
     e = zeros(1, 2);
     for seed = 31:34
         cfg.Seed = seed;
-        [w, truth] = run_link(cfg);
+        [w, truth] = sim.run_link(cfg);
         Y = rx.ofdm_demod(rx.sync(w, ctx, truth.TimingOffset), ctx);
         Hp = rx.ls_estimate(Y, ctx);
         Ht = truth.H .* truth.PAGain;
@@ -47,9 +46,9 @@ end
 
 %% 2. Per-pilot LS hides the distortion
 fprintf('2. Equalized pilots with per-pilot LS and with the smoothed channel\n');
-cfg = simo_config(quiet{:}, static{:}, poly{:}, 'SNRdB', 30, 'Seed', 31);
+cfg = simo_config(static{:}, poly{:}, 'SNRdB', 30, 'Seed', 31);
 ctx = rx.context(cfg);
-[w, truth] = run_link(cfg);
+[w, truth] = sim.run_link(cfg);
 [~, tr] = rx.receive(w, ctx, 'smoothed');
 equalized = @(H) sum(conj(H).*tr.Y, 3) ./ sum(abs(H).^2, 3);
 pilotError = @(H) rms(subsref(equalized(H) - ctx.PilotGrid, substruct('()', {ctx.PilotIndices})));
@@ -69,9 +68,9 @@ passed = report(d < 1e-9 && isequal(size(info.Coefficients), [4 5]), ...
 
 %% 4. No PA, no noise
 fprintf('4. No PA and no noise: no correction\n');
-cfg = simo_config(quiet{:}, static{:}, 'SNRdB', Inf, 'Seed', 31);
+cfg = simo_config(static{:}, 'SNRdB', Inf, 'Seed', 31);
 ctx = rx.context(cfg);
-[w, truth] = run_link(cfg);
+[w, truth] = sim.run_link(cfg);
 [~, tr] = rx.receive(w, ctx, 'dpoi_knownH', truth);
 c = tr.DPoI.Coefficients;
 rest = c; rest(1) = 0;
@@ -84,9 +83,9 @@ passed = report(ok, sprintf('c(1,0) = %.5f, largest other |c| %.1e, data error %
 fprintf('5. PA without noise, true channel: EVM before and after the post-inverse\n');
 cases = {'polynomial PA', poly, 0.7; '3GPP MP PA', mppa, 0.7};
 for c = 1:size(cases, 1)
-    cfg = simo_config(quiet{:}, static{:}, cases{c, 2}{:}, 'SNRdB', Inf, 'Seed', 31);
+    cfg = simo_config(static{:}, cases{c, 2}{:}, 'SNRdB', Inf, 'Seed', 31);
     ctx = rx.context(cfg);
-    [w, truth] = run_link(cfg);
+    [w, truth] = sim.run_link(cfg);
     x = truth.Grid(ctx.DataIndices);
     [~, a] = rx.receive(w, ctx, 'knownH', truth);
     [~, b] = rx.receive(w, ctx, 'dpoi_knownH', truth);
@@ -100,12 +99,12 @@ end
 
 %% 6. Noise estimate
 fprintf('6. Noise estimate against the error left on the data (20 dB, polynomial PA)\n');
-cfg = simo_config(quiet{:}, static{:}, poly{:}, 'SNRdB', 20);
+cfg = simo_config(static{:}, poly{:}, 'SNRdB', 20);
 ctx = rx.context(cfg);
 ratio = zeros(1, 2);
 for seed = 31:36
     cfg.Seed = seed;
-    [w, truth] = run_link(cfg);
+    [w, truth] = sim.run_link(cfg);
     x = truth.Grid(ctx.DataIndices);
     [~, a] = rx.receive(w, ctx, 'dpoi');
     [~, b] = rx.receive(w, ctx, 'smoothed');
@@ -120,13 +119,13 @@ cases = {'polynomial PA, 30 dB', [poly, {'SNRdB',30}], 0.5; ...
     '3GPP MP PA 64QAM, 30 dB', [mppa, {'SNRdB',30}], 0.8; ...
     'no PA, 15 dB', {'SNRdB',15}, 1.25};
 for c = 1:size(cases, 1)
-    cfg = simo_config(quiet{:}, static{:}, cases{c, 2}{:});
+    cfg = simo_config(static{:}, cases{c, 2}{:});
     ctx = rx.context(cfg);
     errors = zeros(1, 3); bits = 0;
     modes = {'conventional', 'smoothed', 'dpoi'};
     for seed = 41:46
         cfg.Seed = seed;
-        [w, truth] = run_link(cfg);
+        [w, truth] = sim.run_link(cfg);
         for m = 1:3
             errors(m) = errors(m) + nnz((rx.receive(w, ctx, modes{m}) < 0) ~= truth.CodedBits);
         end

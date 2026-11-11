@@ -69,13 +69,12 @@ for k = 1:numel(names)
 end
 
 % Test link: the first model's link (where known), then the overrides.
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
-base = simo_config(quiet{:});
+base = simo_config();
 for k = 1:numel(loaded)
     if isfield(loaded{k}, 'LinkConfig'), base = loaded{k}.LinkConfig; break; end
 end
 overrides = [opt.Link, {'Coding','ldpc'}];
-base = slot_config(base, struct(overrides{:}));
+base = sim.override(base, struct(overrides{:}));
 for k = 1:numel(loaded)
     checkLink(loaded{k}, base, names{k});
 end
@@ -120,7 +119,7 @@ for i = 1:S
         if ~isempty(pas)
             cfg = nn.use_pa(cfg, pas(mod(n - 1, size(pas, 1)) + 1, :));
         end
-        [w, truth] = run_link(cfg);
+        [w, truth] = sim.run_link(cfg);
         llrs = cell(1, R);
         llrs{1} = rx.receive(w, ctx, 'conventional');
         llrs{2} = rx.receive(w, ctx, 'knownH', truth);
@@ -128,7 +127,7 @@ for i = 1:S
             ideal = cfg;
             ideal.PAModel = 'none';
             ideal.MaximumDopplerShift = 0;
-            [wIdeal, truthIdeal] = run_link(ideal);
+            [wIdeal, truthIdeal] = sim.run_link(ideal);
             llrs{3} = rx.receive(wIdeal, ctx, 'knownH', truthIdeal);
         end
         for b = 1:numel(baselines)
@@ -138,7 +137,7 @@ for i = 1:S
             llrs{refs + k} = nn.receive(w, ctx, loaded{k});
         end
         for r = 1:R
-            e = evaluate(llrs{r}, truth, cfg);
+            e = sim.evaluate(llrs{r}, truth, cfg);
             counts(r, i, :) = squeeze(counts(r, i, :)) + [e.UncodedErrors; e.UncodedBits; e.BlockError; e.CodedErrors; e.CodedBits];
         end
     end

@@ -1,6 +1,6 @@
 function [rxWaveform, truth, trace] = run_link(cfg)
 %RUN_LINK Transmitter and channel for one slot: what the receiver gets.
-%   [rxWaveform, truth, trace] = run_link(cfg)
+%   [rxWaveform, truth, trace] = sim.run_link(cfg)
 %   rxWaveform  samples x receive antennas; the only receiver input
 %               (together with rx.context(cfg)).
 %   truth       for evaluation and genie baselines only:

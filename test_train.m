@@ -61,12 +61,11 @@ ok = near(norms.a, 5) && near(norms.b, 0.5) && near(norm([va vb]), 1) && near(va
 passed = report(ok, '2. clipping: norm 5 -> 1 (direction kept), norm 0.5 untouched, Inf only measures') && passed;
 
 %% 3. nn.train: interrupted and resumed = uninterrupted
-quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 ncfg = nn_config('Link', {'Coding','ldpc'}, 'SIRRange', [Inf Inf], 'MaxEpochs', 4, ...
     'MiniBatchSize', 2, 'LearningRate', 3e-3, 'LearningRateSchedule', 'linear', ...
     'WarmupSteps', 3, 'FinalLearningRate', 1e-4, 'GradientClip', 0.5, ...
     'Widths', [8 8], 'Dilations', [1 1; 1 1], 'ExecutionEnvironment', 'cpu', 'Verbose', false);
-baseCfg = simo_config(quiet{:}, ncfg.Link{:});
+baseCfg = simo_config(ncfg.Link{:});
 ctx = rx.context(baseCfg);
 plan = nn.plan_slots(ncfg, 77, 3, ncfg.MaxEpochs, []);
 for e = 1:ncfg.MaxEpochs

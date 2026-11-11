@@ -7,7 +7,7 @@ function cfg = simo_config(varargin)
 %
 %   You can also edit the returned structure:
 %       cfg.SNRdB = 15;
-%       [X,H,Y,meta] = mini_simo_channel(cfg);
+%       [rxWaveform, truth] = sim.run_link(cfg);
 
     % inputParser pairs each parameter name with its value and checks it.
     p = inputParser;
@@ -15,7 +15,6 @@ function cfg = simo_config(varargin)
     positiveScalar = @(x) isnumeric(x) && isscalar(x) && isreal(x) && isfinite(x) && x>0;
     positiveInteger = @(x) positiveScalar(x) && x==fix(x);
     nonnegativeScalar = @(x) isnumeric(x) && isscalar(x) && isreal(x) && isfinite(x) && x>=0;
-    logicalScalar = @(x) islogical(x) && isscalar(x);
 
     addParameter(p,'NumResourceBlocks',26,positiveInteger); % 12 subcarriers each.
     addParameter(p,'SubcarrierSpacing',15, ...
@@ -86,10 +85,6 @@ function cfg = simo_config(varargin)
         @(x) (ischar(x) || isstring(x)) && any(strcmp(x,{'dmrs','perfect'})));
     addParameter(p,'Seed',42, ...
         @(x) nonnegativeScalar(x) && x==fix(x) && x<=2^32-1);
-    addParameter(p,'ShowPlots',true,logicalScalar);
-    addParameter(p,'RunChecks',true,logicalScalar);
-    addParameter(p,'SaveData',true,logicalScalar); % Disable during sweeps.
-    addParameter(p,'Verbose',true,logicalScalar);  % Print per-slot information.
     parse(p,varargin{:});
     cfg = p.Results;
     cfg.Modulation = char(cfg.Modulation);

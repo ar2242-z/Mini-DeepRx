@@ -35,7 +35,7 @@ function [llr, trace] = receive(rxWaveform, ctx, mode, genie, options)
 %                     this post-inverse can do with the estimated channel.
 %     'dpoi_knownH'   'dpoi' with the true channel g.*H and true timing, as
 %                     'knownH'; the coefficients still come from the pilots.
-%   genie (truth from run_link) is needed only for the modes that say so and
+%   genie (truth from sim.run_link) is needed only for the modes that say so and
 %   for ctx.TimingEstimation 'perfect'. The conventional receiver with 'dmrs'
 %   timing uses nothing but rxWaveform and ctx.
 %   options: struct of rx.dpoi options (Orders, Memory, Oversampling, Ridge)
