@@ -19,7 +19,7 @@ passed = true;
 pa = {'Coding','ldpc','PAModel','polynomial','PACoefficients',[1 -1/3]};
 
 %% 1. Untrained tcnn_feq equals the conventional receiver
-cfg = simo_config(pa{:},'PABackoffdB',3,'SNRdB',20,'Seed',11);
+cfg = link_config(pa{:},'PABackoffdB',3,'SNRdB',20,'Seed',11);
 ctx = rx.context(cfg);
 rng(7,'twister');
 model = struct('Flow','tcnn_feq','TCNNInputSize',[ctx.SlotLength 1 2*ctx.NumReceiveAntennas]);
@@ -56,7 +56,7 @@ ncfg = nn_config('Link',pa,'SNRRange',[25 25],'DopplerRange',[100 100], ...
     'DelaySpreadRange',[300e-9 300e-9],'SIRRange',[Inf Inf],'PABackoffRange',[0 0], ...
     'MaxEpochs',150,'MiniBatchSize',4,'LearningRate',3e-3,'TCNNWidths',[32 32 32], ...
     'TCNNDilations',[1 2 1],'ExecutionEnvironment','cpu','Verbose',false);
-baseCfg = simo_config(ncfg.Link{:});
+baseCfg = link_config(ncfg.Link{:});
 bank = nn.pa_bank(baseCfg,ncfg);
 plan = nn.plan_slots(ncfg,77,8,1,[],bank.Training);
 data = nn.make_data(baseCfg,ncfg,plan,true);
@@ -89,7 +89,7 @@ passed = report(err < 1e-4,sprintf('4. nn.receive = training forward pass (error
 root = fileparts(mfilename('fullpath'));
 trained = load(fullfile(root,'models','fcnn.mat'),'model');
 fcnnModel = trained.model;
-cfg = simo_config('Coding','ldpc','SNRdB',20,'Seed',5001);
+cfg = link_config('Coding','ldpc','SNRdB',20,'Seed',5001);
 ctx = rx.context(cfg);
 [rxWaveform,truth] = sim.run_link(cfg);
 rng(7,'twister');
@@ -127,7 +127,7 @@ fprintf('6. Mixed conditions, 32 training / 16 validation slots, small TCNN, 15 
 ncfg = nn_config('Link',pa,'SIRRange',[Inf Inf],'PABackoffRange',[0 10],'MaxEpochs',15, ...
     'MiniBatchSize',4,'LearningRate',3e-3,'TCNNWidths',[16 16 16],'TCNNDilations',[1 2 1], ...
     'ExecutionEnvironment','cpu','Verbose',false);
-baseCfg = simo_config(ncfg.Link{:});
+baseCfg = link_config(ncfg.Link{:});
 ctx = rx.context(baseCfg);
 bank = nn.pa_bank(baseCfg,ncfg);
 trainPlan = nn.plan_slots(ncfg,501,32,1,[],bank.Training);

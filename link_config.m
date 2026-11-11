@@ -1,8 +1,8 @@
 
-function cfg = simo_config(varargin)
-%SIMO_CONFIG Create settings for the mini SIMO experiment.
-%   cfg = simo_config() returns all default settings as a structure.
-%   cfg = simo_config('SNRdB', 5, 'MaximumDopplerShift', 200)
+function cfg = link_config(varargin)
+%LINK_CONFIG Physical link settings: carrier, antennas, coding, PA, channel, noise.
+%   cfg = link_config() returns all default settings as a structure.
+%   cfg = link_config('SNRdB', 5, 'MaximumDopplerShift', 200)
 %   changes only the named settings; the others keep their defaults.
 %
 %   You can also edit the returned structure:

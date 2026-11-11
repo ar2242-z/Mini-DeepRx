@@ -1,7 +1,8 @@
 # Mini DeepRx: link-level simulation in MATLAB
 
-A single-input, multiple-output (SIMO) 5G uplink link — one transmit antenna, two
-receive antennas — built to compare a conventional receiver with neural receivers
+A 5G uplink link-level simulation, currently one transmit antenna and two receive
+antennas (SIMO, single stream; `NumReceiveAntennas` sets the receive side), built to
+compare a conventional receiver with neural receivers
 (TCNN, FCNN/DeepRx, and hybrids) on identical signals.
 
 The code is organised along the signal chain. Each physical processing block is
@@ -15,7 +16,7 @@ one function, grouped by where it sits in the chain:
 +sim/   simulation glue    run_link (Tx + channel for one slot), evaluate (BER/BLER), override (config)
 ```
 
-All blocks share one configuration struct from `simo_config.m`. The earlier scripts
+All blocks share one configuration struct from `link_config.m`. The earlier scripts
 (`mini_simo_channel.m`, `decode_simo_ls.m`, `network.m`, `TCNN.m`, `sweep.m`, …) were removed;
 they remain in git history (commit `b29a596`), as do the reference outputs the rebuild was
 checked against.
@@ -35,7 +36,7 @@ Requirements: MATLAB with 5G Toolbox. Neural receivers will also need Deep Learn
 One call runs the whole chain for one slot:
 
 ```matlab
-cfg = simo_config('Coding','ldpc');                 % or 'none' for uncoded bits
+cfg = link_config('Coding','ldpc');                 % or 'none' for uncoded bits
 stream = RandStream('mt19937ar','Seed',cfg.Seed);
 [waveform, txOut] = tx.transmit(cfg, stream);
 ```
@@ -67,7 +68,7 @@ spacing, FFT size 512, 16QAM, one DMRS symbol, code rate 0.5.
 Not modelled: data scrambling (TS 38.211 6.3.1.1), transmit windowing, and
 up-conversion to the carrier frequency (all signals are complex baseband).
 
-### Transmitter settings (`simo_config`)
+### Transmitter settings (`link_config`)
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -85,7 +86,7 @@ up-conversion to the carrier frequency (all signals are complex baseband).
 | `Seed` | 42 | Random seed for the slot |
 
 ```matlab
-cfg = simo_config('Modulation','QPSK','Coding','ldpc','TargetCodeRate',0.3, ...
+cfg = link_config('Modulation','QPSK','Coding','ldpc','TargetCodeRate',0.3, ...
     'PAModel','rapp','PABackoffdB',3);
 ```
 
@@ -133,7 +134,7 @@ must not read them.
   average power of 1, so `SNRdB` means the same for TDL and CDL. The earlier code used the
   default, so its CDL results ran at roughly 2.5–3 dB lower SNR than configured.
 
-### Channel settings (`simo_config`)
+### Channel settings (`link_config`)
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -158,7 +159,7 @@ must not read them.
 The whole link for one slot:
 
 ```matlab
-cfg = simo_config('Coding','ldpc','SNRdB',12);
+cfg = link_config('Coding','ldpc','SNRdB',12);
 ctx = rx.context(cfg);                          % what the receiver knows (build once)
 [rxWaveform, truth] = sim.run_link(cfg);            % Tx + channel
 llr = rx.receive(rxWaveform, ctx, 'conventional');
@@ -178,7 +179,7 @@ window, and fixed interpolation matrices. The conventional receiver uses only `r
 | `rx.ofdm_demod` | CP removal + FFT | For each symbol, an Nfft-sample window starting halfway into the CP (so small timing errors stay inside the CP), FFT, keep the 312 occupied bins, undo the phase rotation from the early window. Output `Y`: 312 × 14 × 2. Equals `nrOFDMDemodulate`. |
 | `rx.ls_estimate` | Channel estimation at the pilots + noise estimate | Least squares: Ĥ = Y · conj(X) at each pilot (unit-power pilots). Noise (plus interference) power from second differences of neighbouring pilot estimates, E\|d\|² = 6σ². |
 | `rx.interpolate` | Pilots → full grid | Linear in frequency between the LS pilot estimates (extrapolated at the edges), linear in time between pilot symbols, nearest pilot symbol held outside them. With one pilot symbol the channel is assumed constant over the slot, so Doppler is not tracked. |
-| `rx.equalize` | SIMO combining + equalization | LMMSE equalization: w = hᴴ/(‖h‖² + σ²), with its bias μ = ‖h‖²/(‖h‖² + σ²) removed for the demapper. For one stream this equals maximum-ratio combining, x̂ = Σ conj(H)·Y / Σ\|H\|², with noise variance ν = σ² / Σ\|H\|² — large where the channel fades. |
+| `rx.equalize` | Receive combining + equalization (single stream) | LMMSE equalization: w = hᴴ/(‖h‖² + σ²), with its bias μ = ‖h‖²/(‖h‖² + σ²) removed for the demapper. For one stream this equals maximum-ratio combining, x̂ = Σ conj(H)·Y / Σ\|H\|², with noise variance ν = σ² / Σ\|H\|² — large where the channel fades. |
 | `rx.demap_llr` | Soft demapper | Max-log LLR per bit, `log P(0)/P(1)`, in transmit bit order: (closest point with bit 1 − closest with bit 0)/ν. Equals `nrSymbolDemodulate`. |
 | `rx.ldpc_decode` | Channel decoder | Rate recovery → belief-propagation LDPC decoding (`LDPCMaxIterations`, default 25) → reassembly → CRC check. Returns the transport block and whether its CRC passed. |
 | `rx.receive` | Whole receiver | `'conventional'`: the chain above (LS at the pilots, linear interpolation, LMMSE equalization). `'knownH'`: true H instead of estimation and interpolation, with true timing (the true H belongs to the true timing: a one-sample shift rotates subcarrier k by 2πk/Nfft). `'dpoi'` and its variants: the PA compensation baseline, see *PA compensation baseline* below. Returns LLRs and every intermediate result. |
@@ -203,7 +204,7 @@ differentiable and sits before any learned block.
 |---|---|
 | `sim.run_link` | Tx + channel for one slot. Separate random streams from `cfg.Seed`: bits, fading, interferer, noise — so changing the coding never changes the fading or noise. Returns the received waveform, `truth`, and all Tx/channel checkpoints. |
 | `sim.evaluate` | Uncoded bit errors (hard decisions on the LLRs), and with LDPC the decoded bit errors and block error (CRC). |
-| `sim.override` | Copies settings onto a configuration and re-validates it with `simo_config` (per-slot pilot layouts, test links from a saved model). |
+| `sim.override` | Copies settings onto a configuration and re-validates it with `link_config` (per-slot pilot layouts, test links from a saved model). |
 
 **Reference performance** (TDL-C, 300 ns, 100 Hz Doppler, 16QAM, LDPC rate 0.5, one DMRS
 symbol, DMRS timing; 30 slots per point):
@@ -218,7 +219,7 @@ symbol, DMRS timing; 30 slots per point):
 The LS receiver levels off near BER 0.012 because a single pilot symbol cannot follow the channel as it changes over the slot (Doppler).
 This gap to known H is what the neural receivers aim to close.
 
-### Receiver settings (`simo_config`)
+### Receiver settings (`link_config`)
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -343,7 +344,7 @@ result = sim.evaluate(llr, truth, cfg);
 | `nn.fcnn_forward` | FFT → features → network, the forward function the training loop calls. |
 | `nn.train` | Generic training loop for every neural receiver: Adam, mini-batches, fresh training slots each epoch, validation loss / BER / BLER each epoch, keeps the best checkpoint. `params` is a struct of networks, so TCNN and hybrids reuse it; networks can be frozen. |
 | `nn.receive` | Runs a saved model's flow; same inputs and outputs as `rx.receive`. Uses only the received samples and `ctx`. |
-| `nn_config.m` | Training settings (condition ranges, seeds, epochs, batch size, learning rate, architecture), separate from the physical link in `simo_config`. |
+| `nn_config.m` | Training settings (condition ranges, seeds, epochs, batch size, learning rate, architecture), separate from the physical link in `link_config`. |
 | `train_receiver.m` | With `'Flow','fcnn'`: plan → simulate validation set → build → train → save `models/<Name>.mat` (flow, networks, link and training configuration, output convention, best epoch). See *TCNN and hybrid flows* for its other options. |
 
 **Training**
@@ -389,7 +390,7 @@ polarization note above).
 6. Use the model:
    ```matlab
    s = load('models/fcnn.mat');
-   cfg = simo_config('Coding','ldpc','SNRdB',20,'Seed',5001);
+   cfg = link_config('Coding','ldpc','SNRdB',20,'Seed',5001);
    ctx = rx.context(cfg);
    [rxWaveform, truth] = sim.run_link(cfg);
    rFCNN = sim.evaluate(nn.receive(rxWaveform, ctx, s.model), truth, cfg)
@@ -402,7 +403,7 @@ For a first look, `train_receiver('Flow','fcnn','MaxEpochs',20,'Name','fcnn_quic
 Main settings (`nn_config`): `MaxEpochs` (150), `SlotsPerSeed` (200 per training seed per
 epoch, 5 seeds), `MiniBatchSize` (4), `LearningRate` (1e-3), `SNRRange` ([-4 32] dB),
 `DopplerRange` ([0 500] Hz), `DelaySpreadRange` ([10 300] ns), `SIRRange` ([0 36] dB;
-`[Inf Inf]` for no interferer), `ChannelModels` ({'TDL-C'}), `PilotConfigs`, `Link` (simo_config
+`[Inf Inf]` for no interferer), `ChannelModels` ({'TDL-C'}), `PilotConfigs`, `Link` (link_config
 overrides for the base link, default `{'Coding','ldpc'}`), `Widths`/`Dilations`, `Name`.
 
 ### Training under PA distortion
@@ -699,7 +700,7 @@ compare_snr({'fcnn','models/old/fcnn_v1.mat'}, 'Labels',{'new','v1'}, ...
 
 - **Models:** a name means `models/<name>.mat`. Anything ending in `.mat` is a file path.
 - **Test link:** the **first** model's link (PA, Doppler, delay spread, channel model, SIR, …),
-  changed with `'Link',{...}` (simo_config names). Put the model whose conditions you want
+  changed with `'Link',{...}` (link_config names). Put the model whose conditions you want
   first, or set them explicitly.
 - **PA compensation baselines:** with a PA on the test link, 'LMMSE smoothed' and 'DPoI' are
   added (`rx.receive` modes `'smoothed'` and `'dpoi'`). `'Baselines'` chooses them: any of

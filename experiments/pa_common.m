@@ -6,7 +6,7 @@ function args = pa_common()
 %     addpath experiments
 %     args = pa_common;
 %     train_receiver(args{:}, 'Flow', 'fcnn', 'Name', 'fcnn_pa')
-%   Link: 16QAM, LDPC rate 0.5, polynomial PA a1*u + a3*u|u|^2 (simo_config).
+%   Link: 16QAM, LDPC rate 0.5, polynomial PA a1*u + a3*u|u|^2 (link_config).
 %   Each slot draws a back-off in [0 10] dB (0 dB: heavy distortion, 10 dB:
 %   mild) and one of 30 dithered training PAs; validation uses 10 others.
 %   No interferer, so the PA is the only new impairment.

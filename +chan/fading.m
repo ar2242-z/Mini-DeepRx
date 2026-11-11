@@ -41,7 +41,7 @@ function channel = makeChannel(cfg, sampleRate, seed)
     % CDL: clustered paths with angles, antennas set by array geometry.
     if startsWith(cfg.ChannelModel,'TDL')
         channel = nrTDLChannel;
-        channel.NumTransmitAntennas = 1;
+        channel.NumTransmitAntennas = 1;   % Single stream for now (no MIMO yet).
         channel.NumReceiveAntennas = cfg.NumReceiveAntennas;
         channel.MIMOCorrelation = 'Low';
     else
@@ -53,7 +53,7 @@ function channel = makeChannel(cfg, sampleRate, seed)
         % for all ten models. The toolbox default slants a single element at
         % 45 degrees, which captures only about half the power of CDL's
         % cross-polarized rays (measured 0.50-0.60).
-        channel.TransmitAntennaArray.Size = [1 1 1 1 1];
+        channel.TransmitAntennaArray.Size = [1 1 1 1 1];   % Single stream for now.
         channel.TransmitAntennaArray.Element = 'isotropic';
         channel.TransmitAntennaArray.PolarizationAngles = [0 90];
         channel.ReceiveAntennaArray.Size = [1 cfg.NumReceiveAntennas 1 1 1];

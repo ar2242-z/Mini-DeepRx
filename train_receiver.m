@@ -30,7 +30,7 @@ function [model, history] = train_receiver(varargin)
 % The model is used with nn.receive(rxWaveform, rx.context(cfg), model).
 ncfg = nn_config(varargin{:});
 flow = nn.flow(ncfg.Flow);
-baseCfg = simo_config(ncfg.Link{:});
+baseCfg = link_config(ncfg.Link{:});
 ctx = rx.context(baseCfg);
 if flow.SinglePilotLayout
     % The conventional blocks take the pilot layout from ctx.

@@ -1,8 +1,8 @@
 function ncfg = nn_config(varargin)
 %NN_CONFIG Training settings for the neural receivers.
 %   ncfg = nn_config() returns the defaults; nn_config('MaxEpochs',20, ...)
-%   overrides named settings. The physical link stays in simo_config:
-%   ncfg.Link holds simo_config name/value overrides for the base link.
+%   overrides named settings. The physical link stays in link_config:
+%   ncfg.Link holds link_config name/value overrides for the base link.
 %   Each training slot draws its conditions independently and uniformly
 %   from the ranges below (SNR and SIR in dB); equal limits fix a value.
 p = inputParser;
@@ -11,7 +11,7 @@ range = @(x) isnumeric(x) && numel(x) == 2 && isreal(x) && x(1) <= x(2) && ~any(
 seeds = @(x) isnumeric(x) && isvector(x) && all(x >= 0 & x <= 2^32-1 & x == fix(x));
 count = @(x) isnumeric(x) && isscalar(x) && x >= 1 && x == fix(x);
 
-% Base link (simo_config overrides). LDPC so validation reports BLER; the
+% Base link (link_config overrides). LDPC so validation reports BLER; the
 % network learns the coded bits on the grid either way.
 addParameter(p, 'Link', {'Coding','ldpc'}, @iscell);
 % Conditions drawn per slot.

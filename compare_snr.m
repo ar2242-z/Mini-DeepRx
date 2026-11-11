@@ -24,7 +24,7 @@ function results = compare_snr(models, varargin)
 %   'Slots'  slots per SNR point (default 30); seeds Seed, Seed+1, ...,
 %            the same at every SNR and for every receiver
 %   'Seed'   first slot seed (default 5001, away from training seeds)
-%   'Link'   simo_config overrides of the test link. The test link starts
+%   'Link'   link_config overrides of the test link. The test link starts
 %            from the FIRST model's link (LinkConfig), e.g. PA model and
 %            back-off, Doppler, delay spread, channel model, SIR; Coding is
 %            always 'ldpc' (for BLER).
@@ -69,7 +69,7 @@ for k = 1:numel(names)
 end
 
 % Test link: the first model's link (where known), then the overrides.
-base = simo_config();
+base = link_config();
 for k = 1:numel(loaded)
     if isfield(loaded{k}, 'LinkConfig'), base = loaded{k}.LinkConfig; break; end
 end

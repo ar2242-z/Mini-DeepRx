@@ -18,7 +18,7 @@ passed = true;
 fprintf('1. Labels -> oracle logits -> LLRs -> LDPC decoding\n');
 cases = {{'Coding','ldpc'}, {'Coding','ldpc','Modulation','QPSK','DMRSAdditionalPosition',1}};
 for k = 1:numel(cases)
-    cfg = simo_config(cases{k}{:},'SNRdB',Inf);
+    cfg = link_config(cases{k}{:},'SNRdB',Inf);
     ctx = rx.context(cfg);
     [~,truth] = sim.run_link(cfg);
     [planes,mask] = nn.labels(truth.CodedBits,ctx);
@@ -48,7 +48,7 @@ passed = report(isfinite(extractdata(value)) && err<1e-6, ...
     sprintf('2. BCE gradient equals (sigmoid(s)-t)*mask/N (max error %.1e)',err)) && passed;
 
 %% 3. The paper's network, and gradients back to the received samples
-cfg = simo_config('Coding','ldpc','SNRdB',15);
+cfg = link_config('Coding','ldpc','SNRdB',15);
 ctx = rx.context(cfg);
 inputSize = [ctx.NumSubcarriers ctx.NumSymbols 2*(2*cfg.NumReceiveAntennas+1)];
 rng(7,'twister');
@@ -76,7 +76,7 @@ ncfg = nn_config('Link',{'Coding','ldpc'},'SNRRange',[20 20],'DopplerRange',[100
     'Dilations',[1 1;3 3;6 6;3 3;1 1],'Verbose',false);
 % The dilations give a reach of about 21 OFDM symbols, so every data symbol
 % can see the single pilot symbol (column 3); fewer blocks cannot.
-baseCfg = simo_config(ncfg.Link{:});
+baseCfg = link_config(ncfg.Link{:});
 plan = nn.plan_slots(ncfg,77,8,1,[]);
 data = nn.make_data(baseCfg,ncfg,plan,true);
 ls = 0;
@@ -104,7 +104,7 @@ saved = load(fullfile(fileparts(mfilename('fullpath')),'models','fcnn.mat'),'mod
 model = saved.model;
 counts = zeros(2,3);
 for seed = 5001:5020
-    cfg = simo_config('Coding','ldpc','SNRdB',20,'MaximumDopplerShift',100,'Seed',seed);
+    cfg = link_config('Coding','ldpc','SNRdB',20,'MaximumDopplerShift',100,'Seed',seed);
     ctx = rx.context(cfg);
     [rxWaveform,truth] = sim.run_link(cfg);
     rFCNN = sim.evaluate(nn.receive(rxWaveform,ctx,model),truth,cfg);

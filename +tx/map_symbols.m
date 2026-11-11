@@ -3,7 +3,7 @@ function [symbols, bitsPerSymbol] = map_symbols(bits, modulation)
 %   [symbols, bitsPerSymbol] = tx.map_symbols(bits, modulation) for
 %   'QPSK', '16QAM' or '64QAM'. With Q = bitsPerSymbol, bits(Q*(k-1)+(1:Q)) label
 %   symbols(k).
-bitsPerSymbol = tx.bits_per_symbol(modulation);
+bitsPerSymbol =  tx.bits_per_symbol(modulation);
 assert(mod(numel(bits), bitsPerSymbol) == 0, ...
     'The number of bits must be a multiple of %d.', bitsPerSymbol);
 symbols = nrSymbolModulate(bits, modulation);

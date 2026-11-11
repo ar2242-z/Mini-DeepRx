@@ -65,7 +65,7 @@ ncfg = nn_config('Link', {'Coding','ldpc'}, 'SIRRange', [Inf Inf], 'MaxEpochs', 
     'MiniBatchSize', 2, 'LearningRate', 3e-3, 'LearningRateSchedule', 'linear', ...
     'WarmupSteps', 3, 'FinalLearningRate', 1e-4, 'GradientClip', 0.5, ...
     'Widths', [8 8], 'Dilations', [1 1; 1 1], 'ExecutionEnvironment', 'cpu', 'Verbose', false);
-baseCfg = simo_config(ncfg.Link{:});
+baseCfg = link_config(ncfg.Link{:});
 ctx = rx.context(baseCfg);
 plan = nn.plan_slots(ncfg, 77, 3, ncfg.MaxEpochs, []);
 for e = 1:ncfg.MaxEpochs

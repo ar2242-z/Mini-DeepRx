@@ -19,7 +19,7 @@ pa = {'Coding','ldpc','PAModel','polynomial','PACoefficients',[1 -1/3]};
 root = fileparts(mfilename('fullpath'));
 
 %% 1. Pseudo-time transform
-cfg = simo_config(pa{:},'PABackoffdB',3,'SNRdB',20,'Seed',11);
+cfg = link_config(pa{:},'PABackoffdB',3,'SNRdB',20,'Seed',11);
 ctx = rx.context(cfg);
 A = nn.pseudo_time_basis(ctx,ctx.Nfft);
 errI = max(abs(A'*A - eye(ctx.NumSubcarriers)),[],'all');
@@ -75,7 +75,7 @@ ncfg = nn_config('Link',pa,'SNRRange',[25 25],'DopplerRange',[100 100], ...
     'DelaySpreadRange',[300e-9 300e-9],'SIRRange',[Inf Inf],'PABackoffRange',[0 0], ...
     'MaxEpochs',250,'MiniBatchSize',4,'LearningRate',3e-3,'Widths',widths,'Dilations',dilations, ...
     'FTFSplit',[3 2 2],'ExecutionEnvironment','cpu','Verbose',false);
-baseCfg = simo_config(ncfg.Link{:});
+baseCfg = link_config(ncfg.Link{:});
 bank = nn.pa_bank(baseCfg,ncfg);
 plan = nn.plan_slots(ncfg,77,8,1,[],bank.Training);
 data = nn.make_data(baseCfg,ncfg,plan,true);

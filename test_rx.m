@@ -14,7 +14,7 @@ passed = true;
 
 %% 1. OFDM demodulator against nrOFDMDemodulate
 fprintf('1. rx.ofdm_demod versus nrOFDMDemodulate\n');
-cfg = simo_config('TimingEstimation','perfect');
+cfg = link_config('TimingEstimation','perfect');
 ctx = rx.context(cfg);
 [rxWaveform,truth] = sim.run_link(cfg);
 slot = rx.sync(rxWaveform,ctx,truth.TimingOffset);
@@ -45,7 +45,7 @@ for m = models
     for snr = snrs
         e = zeros(10,1); berEst = 0; berTrue = 0;
         for seed = 1:10
-            cfg = simo_config('ChannelModel',m{1},'SNRdB',snr,'Seed',seed);
+            cfg = link_config('ChannelModel',m{1},'SNRdB',snr,'Seed',seed);
             [rxWaveform,truth] = sim.run_link(cfg);
             ctxEst = rx.context(cfg);
             ctxTrue = ctxEst; ctxTrue.TimingEstimation = 'perfect';
@@ -66,7 +66,7 @@ fprintf('        all cases: %d%% exact, max |error| %d samples (FFT window margi
 
 %% 4. dlarray, gradients, and batches
 fprintf('4. Differentiable blocks on dlarray, and batches\n');
-cfg = simo_config('SNRdB',15);
+cfg = link_config('SNRdB',15);
 ctx = rx.context(cfg);
 [rxWaveform,truth] = sim.run_link(cfg);
 slot = rx.sync(rxWaveform,ctx);
@@ -90,7 +90,7 @@ ber = zeros(numel(snrs),2); bler = ber;
 for i = 1:numel(snrs)
     counts = zeros(2,3);
     for seed = 1:numSlots
-        cfg = simo_config('Coding','ldpc','SNRdB',snrs(i),'Seed',1000+seed);
+        cfg = link_config('Coding','ldpc','SNRdB',snrs(i),'Seed',1000+seed);
         ctx = rx.context(cfg);
         [rxWaveform,truth] = sim.run_link(cfg);
         for m = 1:2

@@ -1,5 +1,7 @@
 function [xhat, nu] = equalize(Y, H, sigma2, ctx)
-%EQUALIZE LMMSE equalization of the data resource elements (SIMO).
+%EQUALIZE LMMSE equalization of the data resource elements (single stream).
+%   Single stream for now: one transmit antenna and layer; MIMO needs a
+%   matrix (multi-stream) equalizer here.
 %   [xhat, nu] = rx.equalize(Y, H, sigma2, ctx)
 %   Y, H: F x N x Nr x B; sigma2: noise power per RE, 1 x 1 x 1 x B.
 %   The LMMSE equalizer of the paper's baseline (Pihlajasalo et al., IEEE

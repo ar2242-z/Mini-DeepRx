@@ -182,17 +182,17 @@ they are.
 | PA back-off | −1 … 7 dB | −1 … 7 dB OBO relative to P1dB |
 | PA | measured 28 GHz, 17th-order polynomial, dithered | 3GPP 31 GHz CMOS MP (K = 8, M = 5), dithered |
 
-`simo_config`'s defaults (26 RB, 15 kHz, 16QAM) are unchanged: the saved models and
+`link_config`'s defaults (26 RB, 15 kHz, 16QAM) are unchanged: the saved models and
 the regression reference depend on them. MP-PA runs use `mppa_common`.
 
 ## 8. Parameters
 
 | Setting | Where | Default | Meaning |
 |---|---|---|---|
-| `PAModel` | `simo_config` | `'none'` | `'mp3gpp'` selects this PA |
-| `PABackoffdB` | `simo_config` | 6 | For `'mp3gpp'`: OBO relative to P1dB, dB |
-| `MPCoefficients` | `simo_config` | `[]` | Normalized K × M coefficients B as a row (`B(:).'`); `[]` = nominal 3GPP PA |
-| `PAOversampling` | `simo_config` | 4 | PA rate / link sample rate |
+| `PAModel` | `link_config` | `'none'` | `'mp3gpp'` selects this PA |
+| `PABackoffdB` | `link_config` | 6 | For `'mp3gpp'`: OBO relative to P1dB, dB |
+| `MPCoefficients` | `link_config` | `[]` | Normalized K × M coefficients B as a row (`B(:).'`); `[]` = nominal 3GPP PA |
+| `PAOversampling` | `link_config` | 4 | PA rate / link sample rate |
 | `PADither` | `nn_config` | 0.1 (`mppa_common`: **0.05**) | σ of the static-curve dither |
 | `NumTrainingPAs`, `NumValidationPAs` | `nn_config` | 30, 10 | PA family sizes |
 | `PASeed` | `nn_config` | 2023 | Seed of the PA family |

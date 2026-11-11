@@ -15,7 +15,6 @@ function [waveform, out] = transmit(cfg, stream, cellID)
 %     PAGain               Bussgang gain of the PA (1 when linear): a scalar
 %                          for the memoryless miniPA, F x 1 (one gain per
 %                          subcarrier) for the memory polynomial 'mp3gpp'
-% With Coding 'none' the random draws match mini_simo_channel exactly.
 if nargin < 3
     cellID = 0;
 end

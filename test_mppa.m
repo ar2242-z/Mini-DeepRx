@@ -18,7 +18,7 @@ function passed = test_mppa()
 passed = true;
 addpath(fullfile(fileparts(mfilename('fullpath')), 'experiments'));
 args = mppa_common();
-base = simo_config(args{2}{:}, 'SNRdB', Inf);
+base = link_config(args{2}{:}, 'SNRdB', Inf);
 
 %% 1. Nominal PA against the TR model
 fprintf('1. Nominal PA versus the TR 38.803 memory polynomial\n');
@@ -114,7 +114,7 @@ passed = report(ok, sprintf('max |difference| %.2e against nrSymbolDemodulate', 
 
 %% 7. Link through the PA and a channel
 fprintf('7. 64QAM LDPC link through the MP PA (4 dB back-off), TDL-C, 35 dB SNR\n');
-cfg = simo_config(args{2}{:}, 'PABackoffdB', 4, 'SNRdB', 35, 'Seed', 21);
+cfg = link_config(args{2}{:}, 'PABackoffdB', 4, 'SNRdB', 35, 'Seed', 21);
 [w, truth] = sim.run_link(cfg);
 ctx = rx.context(cfg);
 e1 = sim.evaluate(rx.receive(w, ctx, 'knownH', truth), truth, cfg);
