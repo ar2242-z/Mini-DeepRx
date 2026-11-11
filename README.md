@@ -235,7 +235,7 @@ rx.sync → rx.ofdm_demod → nn.deeprx_features → network → nn.to_llr → e
 ```
 
 ```matlab
-s = load('models/fcnn.mat');                       % from train_fcnn
+s = load('models/fcnn.mat');                       % from train_receiver('Flow','fcnn')
 llr = nn.receive(rxWaveform, rx.context(cfg), s.model);
 result = evaluate(llr, truth, cfg);
 ```
@@ -252,17 +252,17 @@ result = evaluate(llr, truth, cfg);
 | `nn.make_data` | Simulates planned slots (`run_link` + `rx.sync`) and stores the synced time samples, pilot grids, labels and masks (and the truth for BLER on validation sets). Storing time samples lets FCNN and TCNN use the same data. |
 | `nn.fcnn_forward` | FFT → features → network, the forward function the training loop calls. |
 | `nn.train` | Generic training loop for every neural receiver: Adam, mini-batches, fresh training slots each epoch, validation loss / BER / BLER each epoch, keeps the best checkpoint. `params` is a struct of networks, so TCNN and hybrids reuse it; networks can be frozen. |
-| `nn.receive` | The FCNN receiver; same inputs and outputs as `rx.receive`. Uses only the received samples and `ctx`. |
+| `nn.receive` | Runs a saved model's flow; same inputs and outputs as `rx.receive`. Uses only the received samples and `ctx`. |
 | `nn_config.m` | Training settings (condition ranges, seeds, epochs, batch size, learning rate, architecture), separate from the physical link in `simo_config`. |
-| `train_fcnn.m` | Plan → simulate validation set → build → train → save `models/<Name>.mat` (network, link and training configuration, feature layout, output convention, best epoch). |
+| `train_receiver.m` | With `'Flow','fcnn'`: plan → simulate validation set → build → train → save `models/<Name>.mat` (flow, networks, link and training configuration, output convention, best epoch). See *TCNN and hybrid flows* for its other options. |
 
 **Training**
 
 ```matlab
-train_fcnn                                   % defaults: TDL-C, SNR -4..32 dB, Doppler 0..500 Hz,
+train_receiver('Flow','fcnn')                % defaults: TDL-C, SNR -4..32 dB, Doppler 0..500 Hz,
                                              % delay 10-300 ns, SIR 0..36 dB, 150 epochs x 1000 slots
-train_fcnn('MaxEpochs',20,'Name','fcnn_quick')
-train_fcnn('ChannelModels',{'TDL-A','TDL-C','TDL-E'},'SIRRange',[Inf Inf])
+train_receiver('Flow','fcnn','MaxEpochs',20,'Name','fcnn_quick')
+train_receiver('Flow','fcnn','ChannelModels',{'TDL-A','TDL-C','TDL-E'},'SIRRange',[Inf Inf])
 ```
 
 Default training simulates about 1000 fresh slots per epoch; on a GPU one epoch takes on the
@@ -282,20 +282,20 @@ polarization note above).
    ```
 3. Start training:
    ```matlab
-   [model, history] = train_fcnn;                       % defaults, saves models/fcnn.mat
-   [model, history] = train_fcnn('Name','fcnn_tdl_mix', ...
+   [model, history] = train_receiver('Flow','fcnn');     % defaults, saves models/fcnn.mat
+   [model, history] = train_receiver('Flow','fcnn','Name','fcnn_tdl_mix', ...
        'ChannelModels',{'TDL-A','TDL-C','TDL-E'});      % any nn_config setting
    ```
    Or without the desktop, logging to a file:
    ```bash
-   matlab -batch "train_fcnn" > train_fcnn.log 2>&1
+   matlab -batch "train_receiver('Flow','fcnn')" > train_fcnn.log 2>&1
    ```
 4. Each epoch prints training loss and validation loss, uncoded BER and LDPC BLER on the fixed
    validation slots. BER sits near 0.5 for the first few epochs before it drops.
 5. `models/<Name>.mat` is rewritten whenever validation loss improves, so stopping early
-   (Ctrl+C) keeps the best model so far. It holds `model` (network, link and training
-   configuration, feature layout, output convention, best epoch) and `history`.
-   Training cannot be resumed from a checkpoint.
+   (Ctrl+C) keeps the best model so far. It holds `model` (flow, networks, link and training
+   configuration, output convention, best epoch) and `history`.
+   `'Resume',true` continues an interrupted run from `models/<Name>_last.mat`.
 6. Use the model:
    ```matlab
    s = load('models/fcnn.mat');
@@ -308,7 +308,7 @@ polarization note above).
 
 Run time: the defaults simulate 1000 fresh slots per epoch for 150 epochs; with a GPU an epoch
 takes roughly 1–2 minutes (slot simulation is a large part of it), about 3–5 hours in total.
-For a first look, `train_fcnn('MaxEpochs',20,'Name','fcnn_quick')` takes about 30 minutes.
+For a first look, `train_receiver('Flow','fcnn','MaxEpochs',20,'Name','fcnn_quick')` takes about 30 minutes.
 Main settings (`nn_config`): `MaxEpochs` (150), `SlotsPerSeed` (200 per training seed per
 epoch, 5 seeds), `MiniBatchSize` (4), `LearningRate` (1e-3), `SNRRange` ([-4 32] dB),
 `DopplerRange` ([0 500] Hz), `DelaySpreadRange` ([10 300] ns), `SIRRange` ([0 36] dB;
@@ -337,7 +337,7 @@ run follows.
 ```matlab
 addpath experiments
 args = pa_common;                               % {:} needs a variable, not a function call
-train_fcnn(args{:}, 'Name', 'fcnn_pa')          % FCNN under PA distortion, ~3 h
+train_receiver(args{:}, 'Flow', 'fcnn', 'Name', 'fcnn_pa')   % FCNN under PA distortion, ~3 h
 ```
 
 Bank settings in `nn_config`: `PADither` (0.1; 0 uses the Link's PA for every slot),
@@ -404,16 +404,16 @@ existed run without it.
 | `nn.flow`, `nn.flow_tcnn_feq`, `nn.flow_tcnn_fcnn`, `nn.flow_ftf` | The flows: which networks each uses and its forward pass. A new flow is one case in `nn.flow` plus one forward function. |
 | `nn.to_planes` | LLRs in transmit order → bit planes on the grid, so the conventional demapper's output uses the FCNN's loss and labels. |
 | `nn.in_training` | Frozen networks run in prediction mode, so their batch-norm statistics stay fixed. |
-| `train_receiver.m` | `train_fcnn` for any flow. `'Flow'` picks the chain, `'InitFrom'` loads networks from a saved model, `'Freeze'` keeps named networks fixed, `'Resume'` continues an interrupted run and `'FindLearningRate'` runs a learning-rate range test. It saves `model.Flow`, `model.Nets` (one field per network) and `model.Trainable`, plus `models/<Name>_last.mat` after every epoch. |
+| `train_receiver.m` | Trains any flow. `'Flow'` picks the chain, `'InitFrom'` loads networks from a saved model, `'Freeze'` keeps named networks fixed, `'Resume'` continues an interrupted run and `'FindLearningRate'` runs a learning-rate range test. It saves `model.Flow`, `model.Nets` (one field per network) and `model.Trainable`, plus `models/<Name>_last.mat` after every epoch. |
 | `nn.learning_rate`, `nn.clip_gradients` | The learning-rate schedule (warmup, hold, linear or cosine decay) and per-network gradient clipping used by `nn.train`. |
-| `nn.receive` | Runs any saved model's flow (models without `Flow` are FCNNs). |
+| `nn.receive` | Runs any saved model's flow. |
 
 **Training the PA experiments** (shared settings from `experiments/pa_common.m`):
 
 ```matlab
 addpath experiments
 args = pa_common;
-train_fcnn(args{:}, 'Name', 'fcnn_pa')                               % FCNN alone
+train_receiver(args{:}, 'Flow', 'fcnn', 'Name', 'fcnn_pa')           % FCNN alone
 train_receiver(args{:}, 'Flow', 'tcnn_feq', 'Name', 'tcnn_feq')      % TCNN + conventional
 train_receiver(args{:}, 'Flow', 'tcnn_fcnn', 'Name', 'tcnn_fcnn', ...
     'InitFrom', 'models/fcnn_pa.mat', 'Freeze', {'fcnn'})            % TCNN in front of the trained FCNN
@@ -593,7 +593,7 @@ on the same slots.
 
 ## Comparing receivers: `compare_snr`
 
-`compare_snr` runs any trained models, from `train_fcnn` or `train_receiver` (any flow),
+`compare_snr` runs any trained models from `train_receiver` (any flow)
 side by side with the paper's two LMMSE baselines: LS-estimated channel ('LMMSE') and known channel ('LMMSE known H'). All receivers see **the same
 slots**, and every point gives three numbers: uncoded BER (hard decisions before LDPC, the
 receiver itself), coded BER (information bits after LDPC decoding) and BLER (blocks whose CRC

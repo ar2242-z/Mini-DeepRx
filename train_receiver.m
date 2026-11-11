@@ -1,7 +1,8 @@
 function [model, history] = train_receiver(varargin)
-%% Train a neural receiver flow (FCNN, TCNN/FEQ, TCNN+FCNN hybrid)
-% Run: train_receiver('Flow','fcnn')                     % same as train_fcnn
+%% Train a neural receiver flow (FCNN, TCNN/FEQ, TCNN+FCNN hybrid, FTF-CNN)
+% Run: train_receiver('Flow','fcnn')                     % FCNN (DeepRx), defaults
 %      addpath experiments; args = pa_common;
+%      train_receiver(args{:},'Flow','fcnn','Name','fcnn_pa')            % FCNN under a PA
 %      train_receiver(args{:},'Flow','tcnn_feq','Name','tcnn_feq')
 %      args = pa_schedule; train_receiver(args{:},'Flow','ftf','Name','ftf')   % FTF-CNN
 %      train_receiver(args{:},'Flow','tcnn_fcnn','Name','tcnn_fcnn', ...
@@ -59,7 +60,7 @@ fprintf('Simulating %d validation slots...\n', height(validationPlan));
 validation = nn.make_data(baseCfg, ncfg, validationPlan, true);
 trainingData = @(epoch) nn.make_data(baseCfg, ncfg, trainingPlan(trainingPlan.Epoch == epoch, :));
 
-% 3. Networks: fresh (FCNN first, so an FCNN starts as in train_fcnn),
+% 3. Networks: fresh (FCNN first, so it starts the same in every flow),
 % then any loaded from InitFrom; Freeze keeps networks fixed.
 inputSize = [ctx.NumSubcarriers ctx.NumSymbols 2*(2*baseCfg.NumReceiveAntennas + 1)];
 tcnnInputSize = nn.tcnn_input_size(ctx);
@@ -92,7 +93,9 @@ if ismember('ftf_f1', flow.Networks)
     end
 end
 if ~isempty(ncfg.InitFrom)
-    loaded = nn.model_nets(getfield(load(ncfg.InitFrom, 'model'), 'model')); %#ok<GFLD>
+    loaded = getfield(load(ncfg.InitFrom, 'model'), 'model'); %#ok<GFLD>
+    assert(isfield(loaded, 'Nets'), '%s has no Nets; it is not from train_receiver.', ncfg.InitFrom);
+    loaded = loaded.Nets;
     for name = intersect(fieldnames(loaded).', flow.Networks)
         n = name{1};
         assert(isequal(loaded.(n).Layers(1).InputSize, params.(n).Layers(1).InputSize), ...
@@ -137,7 +140,7 @@ if ncfg.Resume
 end
 fprintf('Checkpoints go to %s whenever validation loss improves;\n', file);
 fprintf('%s after every epoch (for Resume).\n', lastFile);
-info = struct('Flow', flow.Name, 'Trainable', {trainable}, 'InputSize', inputSize, ...
+info = struct('Flow', flow.Name, 'Trainable', {trainable}, ...
     'TCNNInputSize', tcnnInputSize, 'LinkConfig', baseCfg, 'TrainingConfig', ncfg, ...
     'ValidationPlan', validationPlan, 'PABank', paBank);
 save_model = @(best, history) saveModel(file, best, history, info);
@@ -153,11 +156,6 @@ function model = saveModel(file, best, history, info)
     % Everything needed to use the networks again with nn.receive.
     model.Flow = info.Flow;
     model.Nets = best.Params;                 % One field per network.
-    if isfield(best.Params, 'fcnn')
-        model.Net = best.Params.fcnn;         % FCNN models as from train_fcnn.
-        model.InputSize = info.InputSize;
-        model.FeatureLayout = 'deeprx-v1';
-    end
     if isfield(best.Params, 'tcnn')
         model.TCNNInputSize = info.TCNNInputSize;
     end

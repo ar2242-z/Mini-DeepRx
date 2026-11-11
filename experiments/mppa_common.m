@@ -1,7 +1,7 @@
 function args = mppa_common()
 %MPPA_COMMON Shared settings for receivers trained under the 3GPP MP PA.
-%   args = mppa_common() returns name/value pairs for train_receiver (and
-%   train_fcnn), like pa_common but with the memory polynomial PA of
+%   args = mppa_common() returns name/value pairs for train_receiver,
+%   like pa_common but with the memory polynomial PA of
 %   MPPA.md and the numerology of Pihlajasalo et al. (IEEE TWC 2023,
 %   Table II); a run adds only its own Name (and Flow):
 %     addpath experiments

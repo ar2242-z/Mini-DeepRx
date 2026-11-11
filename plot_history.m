@@ -3,7 +3,7 @@ function summary = plot_history(models, varargin)
 % Run: plot_history({'fcnn','fcnn_pa','tcnn_feq'})
 %      plot_history({'fcnn','fcnn_quick'}, 'Labels',{'150 epochs','20 epochs'}, 'Name','fcnn_runs')
 % models: cell array of names (models/<name>.mat) or .mat file paths saved
-%   by train_fcnn / train_receiver, which store the per-epoch history next
+%   by train_receiver, which stores the per-epoch history next
 %   to the model.
 % Panels:
 %   1. training loss (dashed) and validation loss (solid), one colour per

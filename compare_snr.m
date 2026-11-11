@@ -4,7 +4,7 @@ function results = compare_snr(models, varargin)
 %      compare_snr({'fcnn_pa','tcnn_feq'}, 'Link',{'PABackoffdB',0}, 'Name','snr_pa0')
 %      compare_snr({'fcnn','models/old/fcnn_v1.mat'}, 'SNRs',-4:2:32, 'Slots',100)
 % models: cell array of names (models/<name>.mat) or .mat file paths, from
-%   train_fcnn / train_receiver (any flow). The
+%   train_receiver (any flow). The
 %   paper's two LMMSE baselines are always added as references: 'LMMSE'
 %   (LS channel estimate at the DMRS, linear interpolation, LMMSE
 %   equalization) and 'LMMSE known H' (the true channel). With a PA on the
@@ -186,11 +186,6 @@ function model = loadModel(name, root)
     assert(isfile(file), 'No model file %s.', file);
     s = load(file, 'model');
     model = s.model;
-    if ~isfield(model, 'FeatureLayout') && ~isfield(model, 'Flow') && isfield(model, 'ScoreConvention')
-        % Legacy network.m model: same features and output as deeprx-v1.
-        assert(strcmp(model.ScoreConvention, 'positive means bit 1'));
-        model.FeatureLayout = 'deeprx-v1';
-    end
 end
 
 function checkLink(model, cfg, name)

@@ -89,13 +89,13 @@ passed = report(err < 1e-4,sprintf('4. nn.receive = training forward pass (error
 %% 5. Hybrid starts as the FCNN; InitFrom and Freeze
 root = fileparts(mfilename('fullpath'));
 trained = load(fullfile(root,'models','fcnn.mat'),'model');
-fcnnModel = struct('Net',trained.model.Net,'InputSize',trained.model.InputSize,'FeatureLayout','deeprx-v1');
+fcnnModel = trained.model;
 cfg = simo_config(quiet{:},'Coding','ldpc','SNRdB',20,'Seed',5001);
 ctx = rx.context(cfg);
 [rxWaveform,truth] = run_link(cfg);
 rng(7,'twister');
 hybrid = struct('Flow','tcnn_fcnn','TCNNInputSize',[ctx.SlotLength 1 2*ctx.NumReceiveAntennas]);
-hybrid.Nets = struct('tcnn',nn.tcnn(hybrid.TCNNInputSize),'fcnn',fcnnModel.Net);
+hybrid.Nets = struct('tcnn',nn.tcnn(hybrid.TCNNInputSize),'fcnn',fcnnModel.Nets.fcnn);
 llrH = nn.receive(rxWaveform,ctx,hybrid);
 llrF = nn.receive(rxWaveform,ctx,fcnnModel);
 err = max(abs(llrH-llrF))/max(abs(llrF));
@@ -112,8 +112,8 @@ evalc(['[m,~] = train_receiver(''Link'',pa,''Flow'',''tcnn_fcnn'',''Name'',''tes
     '''InitFrom'',saved,''Freeze'',{''fcnn''},''MaxEpochs'',1,''SlotsPerSeed'',1,' ...
     '''ValidationSlotsPerSeed'',1,''TCNNWidths'',[8 8],''TCNNDilations'',[1 1],' ...
     '''ExecutionEnvironment'',''cpu'');']);
-same = isequal(extractLearnables(m.Nets.fcnn),extractLearnables(fcnnModel.Net)) && ...
-    isequal(extractState(m.Nets.fcnn),extractState(fcnnModel.Net));
+same = isequal(extractLearnables(m.Nets.fcnn),extractLearnables(fcnnModel.Nets.fcnn)) && ...
+    isequal(extractState(m.Nets.fcnn),extractState(fcnnModel.Nets.fcnn));
 L = m.Nets.tcnn.Learnables;
 moved = any(extractdata(L.Value{strcmp(L.Layer,'correction') & strcmp(L.Parameter,'Weights')}),'all');
 passed = report(same && moved && strcmp(m.Flow,'tcnn_fcnn') && isequal(m.Trainable,{'tcnn'}), ...
