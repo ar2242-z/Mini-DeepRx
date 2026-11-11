@@ -2,3 +2,5 @@
 *.asv
 # Training logs
 *.log
+# Resume checkpoints (written every epoch by train_receiver)
+models/*_last.mat

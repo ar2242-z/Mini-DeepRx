@@ -14,11 +14,10 @@ one function, grouped by where it sits in the chain:
 +nn/    neural receivers   FCNN (DeepRx), TCNN, hybrids (TCNN/FCNN, FTF-CNN) and training
 ```
 
-All blocks share one configuration struct from `simo_config.m`. The rebuild plan is in
-[remake.md](remake.md). The earlier scripts (`mini_simo_channel.m`, `decode_simo_ls.m`,
-`network.m`, `TCNN.m`, `sweep.m`, …) were removed; they remain in git history (commit
-`b29a596`). `reference/` keeps what the tests compare against: `ref_v0.mat` (fixed-seed
-outputs of the earlier code) and `legacy_fcnn.mat` (the earlier trained DeepRx network).
+All blocks share one configuration struct from `simo_config.m`. The earlier scripts
+(`mini_simo_channel.m`, `decode_simo_ls.m`, `network.m`, `TCNN.m`, `sweep.m`, …) were removed;
+they remain in git history (commit `b29a596`), as do the reference outputs the rebuild was
+checked against.
 
 Requirements: MATLAB with 5G Toolbox. Neural receivers will also need Deep Learning Toolbox.
 
@@ -270,11 +269,8 @@ Default training simulates about 1000 fresh slots per epoch; on a GPU one epoch 
 order of 1–2 minutes, so 150 epochs take a few hours. The network learns slowly at first
 (BER stays near 0.5 for the first few epochs, as in the earlier runs).
 
-**The earlier trained model still works.** `reference/legacy_fcnn.mat` (from the earlier
-`network.m`) uses the same features and output convention. In the new pipeline, on 20 new
-TDL-C slots at 20 dB and 100 Hz, it reaches uncoded BER 0.0025 against 0.0165 for the
-conventional (LS) receiver. Models trained on CDL channels with the earlier code should be retrained (see the
-CDL polarization note above).
+Models trained on CDL channels with the earlier code should be retrained (see the CDL
+polarization note above).
 
 ### Training the FCNN yourself
 
@@ -480,7 +476,7 @@ other on a log x-axis). Nothing else is saved. For `tcnn_feq`, keep the peak at 
 
 | | Networks | Adam state and schedule | Use for |
 |---|---|---|---|
-| default | new, random (the residual TCNN starts as pass-through) | new | a new run |
+| default | new, random (the TCNN starts as pass-through) | new | a new run |
 | `'InitFrom','models/x.mat'` | loaded from `x.mat` | new (warmup protects the loaded weights) | fine-tuning, new conditions, a new recipe; give it a new `Name` |
 | `'Resume',true` | from `models/<Name>_last.mat` | continued: Adam moments, step count, schedule position, history, best checkpoint, random state | an interrupted run |
 
@@ -491,7 +487,7 @@ the steps or the networks (`MiniBatchSize`, seeds, ranges, widths, ...) are chec
 may grow; with a decaying schedule the decay then stretches from that point, so the rate jumps
 up a little. `models/<Name>.mat` stays the best-validation model, as before.
 
-#### Relation to the paper, and two TCNN architectures: `'TCNNArchitecture'`
+#### Relation to the paper
 
 The flows follow Pihlajasalo et al., "Deep Learning OFDM Receivers for Improved Power
 Efficiency and Coverage", *IEEE Trans. Wireless Commun.* 22(8), 2023:
@@ -506,32 +502,13 @@ Efficiency and Coverage", *IEEE Trans. Wireless Commun.* 22(8), 2023:
 The conventional receiver (the FEQ) is the paper's: LS at the DMRS, linear interpolation,
 LMMSE equalization. The paper uses two DMRS symbols per slot, this project one.
 
-| | `'residual'` (default, `nn.tcnn`) | `'paper'` (`nn.tcnn_paper`, Sec. III-C) |
-|---|---|---|
-| Input | the whole slot: 7680 × 1 × [Re Im of both antennas] | per antenna: 552 × 14 × [Re Im] (Z_pre); one column per OFDM symbol including its CP, shorter CPs zero-padded in front; the antennas share the network |
-| Convolutions | depthwise-separable 3-tap along time, depth multiplier 2, dilations 1-2-4-2-1 | depthwise-separable 3×3 over (sample, symbol), depth multiplier 1, so neighbouring symbols are seen too |
-| Blocks | 5 pre-activation blocks, 64-128-256-128-64, batch norm | the same: 5 pre-activation blocks, 64-128-256-128-64, batch norm |
-| Output | input + correction; the correction starts at zero (untrained = pass-through) | 1×1 conv to 2 channels, no activation: the output *is* the cleaned signal |
-| Parameters | ≈ 0.48 M | ≈ 0.29 M (paper: "about 280 thousand" for TCNN/FEQ) |
-
-The paper gives the layout, the five blocks and their widths, the 3×3 filters and the last
-1×1 layer. The rest of `'paper'` follows DeepRx, whose pre-activation blocks the paper says it
-uses: per block, twice BN → ReLU → depthwise 3×3 → pointwise 1×1; 1×1 skip projections when the
-width changes; a 3×3 input convolution; BN → ReLU before the last layer; and the per-slot RMS
-scaling. Separable convolutions are an inference from the paper's parameter count: plain 3×3
-convolutions at these widths would need about 2.4 M parameters. `TCNNWidths` changes the blocks
-(no `TCNNDilations` for `'paper'`).
-
-```matlab
-% TCNN/FEQ with the paper's TCNN
-train_receiver(args{:}, 'Flow','tcnn_feq', 'TCNNArchitecture','paper', 'Name','tcnn_feq_paper')
-% HybridDeepRx: the paper's TCNN + FCNN, trained together from scratch
-train_receiver(args{:}, 'Flow','tcnn_fcnn', 'TCNNArchitecture','paper', 'Name','hybrid_paper')
-```
-
-An untrained paper TCNN does **not** pass the samples through, so `tcnn_feq_paper` starts
-worse than the conventional receiver and has to learn the identity first. Models saved before this option count as
-`'residual'`.
+The TCNN (`nn.tcnn`) uses the paper's five pre-activation blocks with widths 64-128-256-128-64,
+but not its layout. The paper runs a depthwise-separable 3×3 network over each antenna's slot cut
+into OFDM symbols (sample × symbol). `nn.tcnn` instead treats the whole slot as one 1-D signal
+with both antennas as channels, and uses dilated 3-tap convolutions along time (dilations 1-2-4-2-1,
+about 42 samples ≈ 5.5 µs of view, depth multiplier 2). It also outputs input + correction, with the
+correction starting at zero, so an untrained TCNN passes the samples through. That gives about
+0.48 M parameters (the paper: about 0.28 M).
 
 The paper also trains differently: TDL-B/C/D for training and TDL-A/E for validation,
 back-off −1 to 7 dB, a 17th-order polynomial fitted to a measured PA, batch 20, and learning
@@ -616,8 +593,8 @@ on the same slots.
 
 ## Comparing receivers: `compare_snr`
 
-`compare_snr` runs any trained models, from `train_fcnn` or `train_receiver` (any flow) or the
-legacy file, side by side with the paper's two LMMSE baselines: LS-estimated channel ('LMMSE') and known channel ('LMMSE known H'). All receivers see **the same
+`compare_snr` runs any trained models, from `train_fcnn` or `train_receiver` (any flow),
+side by side with the paper's two LMMSE baselines: LS-estimated channel ('LMMSE') and known channel ('LMMSE known H'). All receivers see **the same
 slots**, and every point gives three numbers: uncoded BER (hard decisions before LDPC, the
 receiver itself), coded BER (information bits after LDPC decoding) and BLER (blocks whose CRC
 fails, what a real link retransmits). With only 30 slots, coded BER usually drops from about
@@ -626,8 +603,8 @@ fails, what a real link retransmits). With only 30 slots, coded BER usually drop
 ```matlab
 compare_snr({'fcnn','fcnn_pa','tcnn_feq'})                          % SNR 0:4:32 dB, 30 slots per point
 compare_snr({'fcnn_pa','tcnn_feq'}, 'Link',{'PABackoffdB',0}, 'Name','snr_pa0')   % heavy PA
-compare_snr({'fcnn','reference/legacy_fcnn.mat'}, 'Labels',{'new','legacy'}, ...
-    'SNRs',-4:2:32, 'Slots',100, 'Name','snr_new_vs_legacy')
+compare_snr({'fcnn','models/old/fcnn_v1.mat'}, 'Labels',{'new','v1'}, ...
+    'SNRs',-4:2:32, 'Slots',100, 'Name','snr_new_vs_v1')
 ```
 
 - **Models:** a name means `models/<name>.mat`. Anything ending in `.mat` is a file path.
@@ -661,38 +638,29 @@ test_train       % training options: schedule, clipping, Resume, range test (CPU
 test_mppa        % 3GPP memory polynomial PA and 64QAM (see MPPA.md)
 ```
 
-`test_chan` checks the channel against the earlier code (identical timing, `H`, noiseless and
-interference signals for the TDL cases; noise power only, since noise now has its own random
-stream; CDL is skipped because of the polarization fix) and against physics: Y = H·X for a
-static channel and growing intercarrier interference with Doppler, average channel power of 1
+`test_chan` checks the channel against physics: Y = H·X for a static channel and growing intercarrier interference with Doppler, average channel power of 1
 for TDL and CDL models, measured SIR and SNR equal to the settings, and an unchanged wanted
 signal when interference is added.
 
-`test_tx` checks three things:
+`test_tx` checks two things:
 
-1. **Uncoded Tx matches the earlier code:** with `Coding` `'none'`, `tx.transmit`
-   reproduces the bits, grid, masks and PA gain saved from the earlier transmitter for
-   six slot cases.
-2. **The LDPC encoder matches MATLAB's `nrULSCH` bit for bit**, for QPSK and 16QAM, code
+1. **The LDPC encoder matches MATLAB's `nrULSCH` bit for bit**, for QPSK and 16QAM, code
    rates 0.3–0.8, and a 106-RB slot with 7 code blocks.
-3. **Coded loopback over noise:** Tx → OFDM demodulation → AWGN → soft demapping → LDPC
+2. **Coded loopback over noise:** Tx → OFDM demodulation → AWGN → soft demapping → LDPC
    decoding. Without noise the transport block is recovered exactly. With noise, BLER drops
    from 1 to 0 between 4 and 6 dB SNR (16QAM, rate 0.48; the theoretical limit is
    ≈ 4.4 dB).
 
-`test_rx` checks the receiver against the earlier `decode_simo_ls` (channel estimate, noise
-power, equalized symbols and hard decisions identical to ~1e-16 for six saved slots),
-`rx.ofdm_demod` against `nrOFDMDemodulate` and `rx.demap_llr` against `nrSymbolDemodulate`,
+`test_rx` checks `rx.ofdm_demod` against `nrOFDMDemodulate` and `rx.demap_llr` against `nrSymbolDemodulate`,
 DMRS timing against the true timing (and the BER cost of the difference) for five channel
 models at 0/10/30 dB, `dlarray` results, gradients and batches, and the end-to-end SNR sweep
 above (BLER from 1 to ~0, known H never worse than LS).
 
 `test_nn` checks the neural pipeline before any long training: an oracle round trip
 (labels → perfect logits → LLRs → LDPC decoding gives zero errors, so bit order and sign are
-right), features and labels identical to the earlier `deeprx_sample.m`, the loss gradient, the
-paper's network (same parameter count as the earlier one) with gradients reaching the received
-samples, a short training run on 8 slots in which loss and BER fall steadily, and the earlier
-trained network beating the conventional receiver in the new pipeline.
+right), the loss gradient, the paper's network (Table I, 1,234,436 parameters) with gradients
+reaching the received samples, a short training run on 8 slots in which loss and BER fall
+steadily, and the trained `models/fcnn.mat` beating the conventional receiver.
 
 `test_tcnn` checks the TCNN flows before any long training:
 - an untrained `tcnn_feq` gives the conventional receiver's LLRs;
@@ -702,8 +670,6 @@ trained network beating the conventional receiver in the new pipeline.
 - `nn.receive` reproduces the training forward pass;
 - an untrained TCNN in front of an FCNN gives that FCNN's LLRs;
 - `train_receiver` with `InitFrom` and `Freeze` leaves the frozen FCNN unchanged;
-- the paper TCNN's per-symbol layout is exact (an identity network returns the slot),
-  gradients reach all its weights, and `train_receiver` / `nn.receive` run it;
 - on mixed conditions, `tcnn_feq` with the LLR calibration lowers the loss without raising the
   BER (without it, the BER rises).
 
@@ -716,6 +682,3 @@ trained network beating the conventional receiver in the new pipeline.
 - `train_receiver`: 2 epochs + `Resume` to 3 equals 3 epochs, and a changed `MiniBatchSize`
   is refused;
 - `'FindLearningRate',true` runs, stops in time and saves its steps.
-
-`test_tx`, `test_chan`, `test_rx` and `test_nn` compare against `reference/ref_v0.mat`
-(saved from the earlier code) where the new code is meant to agree with it.

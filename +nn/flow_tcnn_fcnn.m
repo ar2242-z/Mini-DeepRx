@@ -7,7 +7,7 @@ function [logits, states] = flow_tcnn_fcnn(params, batch, training, ctx)
 %   nn.in_training), e.g. train a TCNN in front of a trained FCNN.
 %   logits: F x N x Q x B. states: batch-norm statistics of the networks
 %   run in training mode.
-[slot, state] = nn.tcnn_apply(params.tcnn, batch.Slots, nn.in_training(training, 'tcnn'), ctx);
+[slot, state] = nn.tcnn_apply(params.tcnn, batch.Slots, nn.in_training(training, 'tcnn'));
 batch.Slots = slot;
 [logits, states] = nn.fcnn_forward(params, batch, training, ctx);
 if ~isempty(state), states.tcnn = state; end

@@ -12,9 +12,8 @@ function passed = test_tcnn()
 % 5. The hybrid starts as the FCNN: an untrained TCNN in front of a trained
 %    FCNN gives that FCNN's LLRs. train_receiver runs with InitFrom and
 %    Freeze, and leaves the frozen FCNN unchanged.
-% 6. The paper TCNN (TCNNArchitecture 'paper'): the per-symbol layout is
-%    exact (an identity network returns the slot), gradients reach every
-%    weight, and train_receiver / nn.receive run it.
+% 6. LLR calibration under mixed conditions: with the calibration learned
+%    alongside, the TCNN lowers the loss without raising the BER.
 
 quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 passed = true;
@@ -89,9 +88,8 @@ passed = report(err < 1e-4,sprintf('4. nn.receive = training forward pass (error
 
 %% 5. Hybrid starts as the FCNN; InitFrom and Freeze
 root = fileparts(mfilename('fullpath'));
-fcnnFile = fullfile(root,'reference','legacy_fcnn.mat');
-legacy = load(fcnnFile,'model');
-fcnnModel = struct('Net',legacy.model.Net,'InputSize',legacy.model.InputSize,'FeatureLayout','deeprx-v1');
+trained = load(fullfile(root,'models','fcnn.mat'),'model');
+fcnnModel = struct('Net',trained.model.Net,'InputSize',trained.model.InputSize,'FeatureLayout','deeprx-v1');
 cfg = simo_config(quiet{:},'Coding','ldpc','SNRdB',20,'Seed',5001);
 ctx = rx.context(cfg);
 [rxWaveform,truth] = run_link(cfg);
@@ -121,47 +119,12 @@ moved = any(extractdata(L.Value{strcmp(L.Layer,'correction') & strcmp(L.Paramete
 passed = report(same && moved && strcmp(m.Flow,'tcnn_fcnn') && isequal(m.Trainable,{'tcnn'}), ...
     '   train_receiver: FCNN loaded and frozen (weights and statistics unchanged), TCNN trained') && passed;
 
-%% 6. Paper TCNN (TWC 2023, Sec. III-C): per-symbol layout, gradients, training
-cfg = simo_config(quiet{:},pa{:},'PABackoffdB',3,'SNRdB',20,'Seed',11);
-ctx = rx.context(cfg);
-[rxWaveform,truth] = run_link(cfg);
-inputSize = nn.tcnn_input_size(ctx,'paper');
-% An identity network (1x1 conv, weights eye(2)) must give the slot back:
-% the per-symbol packing and unpacking are exact inverses.
-identity = dlnetwork([imageInputLayer(inputSize,'Normalization','none','Name','input')
-    convolution2dLayer(1,2,'Weights',reshape(eye(2),1,1,2,2),'Bias',zeros(1,1,2),'Name','output')]);
-slot = rx.sync(rxWaveform,ctx);
-back = extractdata(nn.tcnn_apply(identity,dlarray(single(slot)),false,ctx));
-err = max(abs(back(:)-slot(:)))/max(abs(slot(:)));
-passed = report(err < 1e-5,sprintf('6. paper layout %s per antenna: identity network returns the slot (error %.1e)', ...
-    mat2str(inputSize),err)) && passed;
-rng(7,'twister');
-net = nn.tcnn_paper(inputSize);
-nParams = sum(cellfun(@numel,net.Learnables.Value));
-[planes,mask] = nn.labels(truth.CodedBits,ctx);
-batch.Slots = dlarray(single(slot));
-batch.PilotGrid = ctx.PilotGrid; batch.Labels = dlarray(planes); batch.Mask = dlarray(single(mask));
-g = dlfeval(@tcnnGradient,struct('tcnn',net),batch,ctx);
-reached = cellfun(@(v) all(isfinite(extractdata(v(:)))) && any(extractdata(v(:))), g.Value);
-passed = report(all(reached),sprintf( ...
-    '   gradient finite and non-zero for all %d parameter arrays (%d parameters, default 64-128-256-128-64)', ...
-    numel(reached),nParams)) && passed;
-evalc(['[m,~] = train_receiver(''Link'',pa,''Flow'',''tcnn_feq'',''TCNNArchitecture'',''paper'',' ...
-    '''TCNNWidths'',[8 16],''Name'',''test_tcnn_paper'',''MaxEpochs'',1,''SlotsPerSeed'',1,' ...
-    '''ValidationSlotsPerSeed'',1,''SIRRange'',[Inf Inf],''ExecutionEnvironment'',''cpu'');']);
-cleanupPaper = onCleanup(@() deleteIfExists({fullfile(root,'models','test_tcnn_paper.mat'), ...
-    fullfile(root,'models','test_tcnn_paper_last.mat')}));
-llrP = nn.receive(rxWaveform,ctx,m);
-passed = report(strcmp(m.TCNNArchitecture,'paper') && isequal(m.TCNNInputSize,inputSize) && ...
-    numel(llrP) == numel(llrLS) && all(isfinite(llrP)), ...
-    '   train_receiver with TCNNArchitecture paper trains, saves, and nn.receive runs it') && passed;
-
-%% 7. LLR calibration under mixed conditions (as in real training)
+%% 6. LLR calibration under mixed conditions (as in real training)
 % Random SNR, Doppler, delay spread, back-off and PA per slot: the
 % conventional LLRs are overconfident, so without calibration the TCNN
 % can lower the loss by degrading the signal. With the calibration learned
 % alongside, the loss must fall without the BER rising.
-fprintf('7. Mixed conditions, 32 training / 16 validation slots, small TCNN, 15 epochs\n');
+fprintf('6. Mixed conditions, 32 training / 16 validation slots, small TCNN, 15 epochs\n');
 ncfg = nn_config('Link',pa,'SIRRange',[Inf Inf],'PABackoffRange',[0 10],'MaxEpochs',15, ...
     'MiniBatchSize',4,'LearningRate',3e-3,'TCNNWidths',[16 16 16],'TCNNDilations',[1 2 1], ...
     'ExecutionEnvironment','cpu','Verbose',false);
@@ -173,7 +136,7 @@ valPlan = nn.plan_slots(ncfg,502,16,1,trainPlan.Seed,bank.Validation);
 trainData = nn.make_data(baseCfg,ncfg,trainPlan);
 valData = nn.make_data(baseCfg,ncfg,valPlan,true);
 forward = @(p,b,t) nn.flow_tcnn_feq(p,b,t,ctx);
-inputSize = nn.tcnn_input_size(ctx,'residual');
+inputSize = nn.tcnn_input_size(ctx);
 rng(ncfg.InitializationSeed,'twister');
 net = nn.tcnn(inputSize,ncfg.TCNNWidths,ncfg.TCNNDilations);
 [conv.Loss,conv.BER] = scoreFlow(struct('tcnn',net),forward,valData);

@@ -8,7 +8,7 @@ function net = tcnn(inputSize, widths, dilations)
 %   Default widths 64-128-256-128-64, as the TCNN of Pihlajasalo et al.,
 %   IEEE TWC 2023, Sec. III-C. The whole-slot 1-D layout, dilations, depth
 %   multiplier 2 and the input + correction output are this project's
-%   choices; nn.tcnn_paper is the paper's per-symbol 2-D network.
+%   choices.
 %   Structure: 3-tap input convolution along time, then residual blocks of
 %     BN -> ReLU -> depthwise 3-tap (dilated, depth multiplier 2) -> 1x1
 %     BN -> ReLU -> depthwise 3-tap (dilated)                      -> 1x1

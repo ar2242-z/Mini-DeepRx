@@ -14,7 +14,7 @@ function [logits, states] = flow_tcnn_feq(params, batch, training, ctx)
 %   ctx gives the pilot layout: every slot must use it (one PilotConfig).
 %   training: see nn.in_training. states.tcnn: new batch-norm statistics.
 states = struct();
-[slot, state] = nn.tcnn_apply(params.tcnn, batch.Slots, nn.in_training(training, 'tcnn'), ctx);
+[slot, state] = nn.tcnn_apply(params.tcnn, batch.Slots, nn.in_training(training, 'tcnn'));
 if ~isempty(state), states.tcnn = state; end
 Y = rx.ofdm_demod(slot, ctx);
 [Hp, sigma2] = rx.ls_estimate(Y, ctx);

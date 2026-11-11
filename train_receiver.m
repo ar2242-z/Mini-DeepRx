@@ -3,7 +3,6 @@ function [model, history] = train_receiver(varargin)
 % Run: train_receiver('Flow','fcnn')                     % same as train_fcnn
 %      addpath experiments; args = pa_common;
 %      train_receiver(args{:},'Flow','tcnn_feq','Name','tcnn_feq')
-%      train_receiver(args{:},'Flow','tcnn_fcnn','TCNNArchitecture','paper','Name','hybrid_paper')
 %      args = pa_schedule; train_receiver(args{:},'Flow','ftf','Name','ftf')   % FTF-CNN
 %      train_receiver(args{:},'Flow','tcnn_fcnn','Name','tcnn_fcnn', ...
 %          'InitFrom','models/fcnn_pa.mat','Freeze',{'fcnn'})
@@ -63,7 +62,7 @@ trainingData = @(epoch) nn.make_data(baseCfg, ncfg, trainingPlan(trainingPlan.Ep
 % 3. Networks: fresh (FCNN first, so an FCNN starts as in train_fcnn),
 % then any loaded from InitFrom; Freeze keeps networks fixed.
 inputSize = [ctx.NumSubcarriers ctx.NumSymbols 2*(2*baseCfg.NumReceiveAntennas + 1)];
-tcnnInputSize = nn.tcnn_input_size(ctx, ncfg.TCNNArchitecture);
+tcnnInputSize = nn.tcnn_input_size(ctx);
 rng(ncfg.InitializationSeed, 'twister');
 params = struct();
 if ismember('fcnn', flow.Networks)
@@ -74,13 +73,7 @@ if ismember('fcnn', flow.Networks)
     end
 end
 if ismember('tcnn', flow.Networks)
-    if strcmp(ncfg.TCNNArchitecture, 'paper')
-        if isempty(ncfg.TCNNWidths)
-            params.tcnn = nn.tcnn_paper(tcnnInputSize);
-        else
-            params.tcnn = nn.tcnn_paper(tcnnInputSize, ncfg.TCNNWidths);
-        end
-    elseif isempty(ncfg.TCNNWidths)
+    if isempty(ncfg.TCNNWidths)
         params.tcnn = nn.tcnn(tcnnInputSize);
     else
         params.tcnn = nn.tcnn(tcnnInputSize, ncfg.TCNNWidths, ncfg.TCNNDilations);
@@ -145,7 +138,7 @@ end
 fprintf('Checkpoints go to %s whenever validation loss improves;\n', file);
 fprintf('%s after every epoch (for Resume).\n', lastFile);
 info = struct('Flow', flow.Name, 'Trainable', {trainable}, 'InputSize', inputSize, ...
-    'TCNNInputSize', tcnnInputSize, 'TCNNArchitecture', ncfg.TCNNArchitecture, 'LinkConfig', baseCfg, 'TrainingConfig', ncfg, ...
+    'TCNNInputSize', tcnnInputSize, 'LinkConfig', baseCfg, 'TrainingConfig', ncfg, ...
     'ValidationPlan', validationPlan, 'PABank', paBank);
 save_model = @(best, history) saveModel(file, best, history, info);
 [best, history] = nn.train(params, forward, trainingData, validation, ncfg, trainable, ...
@@ -167,7 +160,6 @@ function model = saveModel(file, best, history, info)
     end
     if isfield(best.Params, 'tcnn')
         model.TCNNInputSize = info.TCNNInputSize;
-        model.TCNNArchitecture = info.TCNNArchitecture;
     end
     model.Output = 'logit of P(bit = 1) per bit plane (nn.to_llr: LLR = -logit)';
     model.Trainable = info.Trainable;
@@ -193,7 +185,7 @@ function checkResume(saved, ncfg)
     fields = {'Flow','Link','ChannelModels','SNRRange','DopplerRange','DelaySpreadRange', ...
         'SIRRange','PABackoffRange','PADither','NumTrainingPAs','NumValidationPAs','PASeed', ...
         'PilotConfigs','TrainingSeeds','SlotsPerSeed','ValidationSeeds', ...
-        'ValidationSlotsPerSeed','MiniBatchSize','Widths','Dilations','TCNNArchitecture', ...
+        'ValidationSlotsPerSeed','MiniBatchSize','Widths','Dilations', ...
         'TCNNWidths','TCNNDilations','FTFSplit','FTFTransformSize','FTFTimeDilations','Freeze'};
     differ = fields(~cellfun(@(f) isequal(saved.(f), ncfg.(f)), fields));
     assert(isempty(differ), 'Resume needs the same settings as the first run; these differ: %s.', ...

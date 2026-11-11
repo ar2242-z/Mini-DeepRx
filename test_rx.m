@@ -1,10 +1,7 @@
-function passed = test_rx(referenceFile)
+function passed = test_rx()
 %% Check the conventional receiver (+rx), block by block and end to end
 % Run: test_rx
-% 1. Against the earlier receiver (reference/ref_v0.mat): the saved Y fed
-%    through ls_estimate -> interpolate -> equalize -> demap_llr reproduces
-%    decode_simo_ls (H estimate, noise power, equalized symbols, hard bits)
-%    for the estimated and the known H. rx.ofdm_demod equals nrOFDMDemodulate.
+% 1. rx.ofdm_demod equals the 5G Toolbox OFDM demodulator (nrOFDMDemodulate).
 % 2. rx.demap_llr equals the 5G Toolbox soft demapper (nrSymbolDemodulate).
 % 3. rx.sync ('dmrs') lands close to the true timing and costs little BER.
 % 4. Every differentiable block gives the same result on dlarray, gradients
@@ -13,30 +10,11 @@ function passed = test_rx(referenceFile)
 %    the paper's two LMMSE baselines on identical received signals: LS +
 %    linear interpolation, and known H.
 
-if nargin == 0
-    referenceFile = fullfile(fileparts(mfilename('fullpath')),'reference','ref_v0.mat');
-end
 quiet = {'ShowPlots',false,'RunChecks',false,'SaveData',false,'Verbose',false};
 passed = true;
 
-%% 1. Against the earlier receiver
-fprintf('1. Receiver blocks versus legacy decode_simo_ls (%s)\n',referenceFile);
-saved = load(referenceFile,'ref');
-for c = fieldnames(saved.ref.slots).'
-    s = saved.ref.slots.(c{1});
-    ctx = rx.context(fromStruct(s.cfg));
-    [Hp,sigma2] = rx.ls_estimate(s.rx.Y,ctx);
-    H = rx.interpolate(Hp,ctx);
-    [xLS,nuLS] = rx.equalize(s.rx.Y,H,sigma2,ctx);
-    [xKnown,nuKnown] = rx.equalize(s.rx.Y,s.chan.H,sigma2,ctx);
-    bitsLS = double(rx.demap_llr(xLS,nuLS,ctx.Modulation) < 0);
-    bitsKnown = double(rx.demap_llr(xKnown,nuKnown,ctx.Modulation) < 0);
-    errs = [relErr(H,s.ls.Hls), abs(sigma2/s.ls.sigma2Hat-1), ...
-        relErr(xLS,s.ls.XhatLS(ctx.DataIndices)), relErr(xKnown,s.ls.XhatKnown(ctx.DataIndices))];
-    ok = all(errs < 1e-10) && isequal(bitsLS,s.ls.bitsLS) && isequal(bitsKnown,s.ls.bitsKnown);
-    passed = report(ok,sprintf('%-15s H %.0e, sigma2 %.0e, xhat LS %.0e, known %.0e; hard bits equal: %d/%d', ...
-        c{1},errs,isequal(bitsLS,s.ls.bitsLS),isequal(bitsKnown,s.ls.bitsKnown))) && passed;
-end
+%% 1. OFDM demodulator against nrOFDMDemodulate
+fprintf('1. rx.ofdm_demod versus nrOFDMDemodulate\n');
 cfg = simo_config(quiet{:},'TimingEstimation','perfect');
 ctx = rx.context(cfg);
 [rxWaveform,truth] = run_link(cfg);
@@ -156,11 +134,6 @@ end
 
 function e = relErr(a,b)
     e = norm(a(:)-b(:))/max(norm(b(:)),eps);
-end
-
-function cfg = fromStruct(saved)
-    options = [fieldnames(saved).'; struct2cell(saved).'];
-    cfg = simo_config(options{:});
 end
 
 function ok = report(ok,label)

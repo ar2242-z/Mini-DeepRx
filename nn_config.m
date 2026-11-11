@@ -67,11 +67,7 @@ addParameter(p, 'Verbose', true, @(x) islogical(x) && isscalar(x));
 % FCNN architecture: [] means the paper's Table I (see nn.fcnn).
 addParameter(p, 'Widths', [], @(x) isempty(x) || (isnumeric(x) && isvector(x)));
 addParameter(p, 'Dilations', [], @(x) isempty(x) || (isnumeric(x) && size(x,2) == 2));
-% TCNN architecture: 'residual' (nn.tcnn, whole slot, 1-D dilated, starts as
-% pass-through) or 'paper' (nn.tcnn_paper, Pihlajasalo et al. TWC 2023:
-% per-symbol 2-D separable 3x3). Widths [] means 64-128-256-128-64 for both,
-% with dilations 1-2-4-2-1 for 'residual' ('paper' has no dilations).
-addParameter(p, 'TCNNArchitecture', 'residual', @(x) any(strcmp(x, {'residual','paper'})));
+% TCNN (nn.tcnn): [] means widths 64-128-256-128-64, dilations 1-2-4-2-1.
 addParameter(p, 'TCNNWidths', [], @(x) isempty(x) || (isnumeric(x) && isvector(x)));
 addParameter(p, 'TCNNDilations', [], @(x) isempty(x) || (isnumeric(x) && isvector(x)));
 % Frequency-domain hybrid (Flow 'ftf', nn.ftf_cnn): the Widths/Dilations
@@ -105,18 +101,13 @@ ncfg.Name = char(ncfg.Name);
 ncfg.Flow = char(ncfg.Flow);
 ncfg.InitFrom = char(ncfg.InitFrom);
 ncfg.Freeze = cellstr(ncfg.Freeze);
-ncfg.TCNNArchitecture = char(ncfg.TCNNArchitecture);
 ncfg.LearningRateSchedule = char(ncfg.LearningRateSchedule);
 assert(ncfg.FinalLearningRate <= ncfg.LearningRate, ...
     'FinalLearningRate must not exceed the peak LearningRate.');
 assert(~(ncfg.Resume && ~isempty(ncfg.InitFrom)), ...
     'Resume continues a run; InitFrom starts a new one. Give one of them.');
-if strcmp(ncfg.TCNNArchitecture, 'paper')
-    assert(isempty(ncfg.TCNNDilations), 'The paper TCNN has no dilations; give TCNNWidths only.');
-else
-    assert(isempty(ncfg.TCNNWidths) == isempty(ncfg.TCNNDilations), ...
-        'Give TCNNWidths and TCNNDilations together.');
-end
+assert(isempty(ncfg.TCNNWidths) == isempty(ncfg.TCNNDilations), ...
+    'Give TCNNWidths and TCNNDilations together.');
 assert(isempty(intersect(ncfg.TrainingSeeds, ncfg.ValidationSeeds)), ...
     'Training and validation seeds must differ.');
 assert(isempty(ncfg.Widths) == isempty(ncfg.Dilations), ...

@@ -3,7 +3,7 @@ function [llr, trace] = receive(rxWaveform, ctx, model)
 %   [llr, trace] = nn.receive(rxWaveform, ctx, model)
 %   The counterpart of rx.receive with the same inputs and outputs. The
 %   chain follows model.Flow (see nn.flow); models without a Flow (from
-%   train_fcnn, and the legacy model) are FCNNs:
+%   train_fcnn) are FCNNs:
 %     'fcnn'       rx.sync -> rx.ofdm_demod -> nn.deeprx_features -> FCNN
 %     'tcnn_feq'   rx.sync -> TCNN -> conventional receiver (FFT ... demap)
 %     'tcnn_fcnn'  rx.sync -> TCNN -> rx.ofdm_demod -> features -> FCNN
@@ -28,9 +28,7 @@ else
     flow = nn.flow(flowName);
     nets = nn.model_nets(model);
     if isfield(nets, 'tcnn')
-        architecture = 'residual';  % Models saved before the paper TCNN.
-        if isfield(model, 'TCNNArchitecture'), architecture = model.TCNNArchitecture; end
-        expected = nn.tcnn_input_size(ctx, architecture);
+        expected = nn.tcnn_input_size(ctx);
         assert(isequal(model.TCNNInputSize, expected), ...
             'This link gives TCNN input %s; the model expects %s.', ...
             mat2str(expected), mat2str(model.TCNNInputSize));
