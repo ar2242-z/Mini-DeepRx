@@ -11,7 +11,11 @@ function results = compare_snr(models, varargin)
 %   test link, the paper's upper bound is added too, 'Bound (known H, no
 %   PA)': LMMSE with the true channel on the same slots (bits, fading,
 %   noise) sent with a linear PA and a time-invariant channel (Doppler 0),
-%   so there is neither PA distortion nor ICI.
+%   so there is neither PA distortion nor ICI. With a PA, the conventional
+%   receiver-side PA compensation is added as well (see 'Baselines'):
+%   'DPoI', the Digital Post-Inverse of Babaroglu et al. (WAMICON 2023,
+%   rx.dpoi), and 'LMMSE smoothed', the same receiver without the
+%   post-inverse, so the gap between the two is the post-inverse alone.
 % Name/value options:
 %   'SNRs'   SNR points in dB of the uncoded BER panel (default 0:4:32)
 %   'CodedSNRs'  SNR points in dB of the coded BER and BLER panels
@@ -27,6 +31,9 @@ function results = compare_snr(models, varargin)
 %   'UsePABank'  with a polynomial or 'mp3gpp' PA, cycle through the unseen validation
 %            PAs saved in the models (model.PABank), so no model is tested
 %            on a PA it trained on (default true)
+%   'Baselines'  extra rx.receive modes to add as references: any of
+%            'smoothed', 'dpoi', 'dpoi_knownH', 'dpoi_genie' (default
+%            {'smoothed','dpoi'} with a PA on the test link, {} without)
 %   'Labels' legend names (default: the model names)
 %   'Name'   output name: results/<Name>.png and .mat (default 'snr_sweep')
 % Every model must fit the test link (modulation, RBs, antennas, DMRS).
@@ -43,6 +50,7 @@ addParameter(p, 'Slots', 30, @(x) isscalar(x) && x >= 1 && x == fix(x));
 addParameter(p, 'Seed', 5001, @(x) isscalar(x) && x >= 0 && x == fix(x));
 addParameter(p, 'Link', {}, @iscell);
 addParameter(p, 'UsePABank', true, @(x) islogical(x) && isscalar(x));
+addParameter(p, 'Baselines', 'auto', @(x) iscellstr(x) || isstring(x) || ischar(x));
 addParameter(p, 'Labels', {}, @(x) iscellstr(x) || isstring(x));
 addParameter(p, 'Name', 'snr_sweep', @(x) ischar(x) || isstring(x));
 parse(p, models, varargin{:});
@@ -86,6 +94,17 @@ end
 receivers = {'LMMSE', 'LMMSE known H'};
 paOff = ~strcmp(base.PAModel, 'none');
 if paOff, receivers{end + 1} = 'Bound (known H, no PA)'; end
+bound = numel(receivers);
+baselines = cellstr(opt.Baselines);
+if isequal(baselines, {'auto'})
+    if paOff, baselines = {'smoothed', 'dpoi'}; else, baselines = {}; end
+end
+known = {'smoothed', 'dpoi', 'dpoi_knownH', 'dpoi_genie'};
+shown = {'LMMSE smoothed', 'DPoI', 'DPoI known H', 'DPoI genie fit'};
+for b = baselines
+    assert(any(strcmp(b{1}, known)), 'Unknown baseline %s.', b{1});
+    receivers{end + 1} = shown{strcmp(b{1}, known)}; %#ok<AGROW>
+end
 refs = numel(receivers);
 receivers = [receivers, labels(:).'];
 R = numel(receivers); S = numel(snrs);
@@ -111,6 +130,9 @@ for i = 1:S
             ideal.MaximumDopplerShift = 0;
             [wIdeal, truthIdeal] = run_link(ideal);
             llrs{3} = rx.receive(wIdeal, ctx, 'knownH', truthIdeal);
+        end
+        for b = 1:numel(baselines)
+            llrs{bound + b} = rx.receive(w, ctx, baselines{b}, truth);
         end
         for k = 1:numel(loaded)
             llrs{refs + k} = nn.receive(w, ctx, loaded{k});

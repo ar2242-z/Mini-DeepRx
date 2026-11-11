@@ -180,7 +180,9 @@ window, and fixed interpolation matrices. The conventional receiver uses only `r
 | `rx.equalize` | SIMO combining + equalization | LMMSE equalization: w = hᴴ/(‖h‖² + σ²), with its bias μ = ‖h‖²/(‖h‖² + σ²) removed for the demapper. For one stream this equals maximum-ratio combining, x̂ = Σ conj(H)·Y / Σ\|H\|², with noise variance ν = σ² / Σ\|H\|² — large where the channel fades. |
 | `rx.demap_llr` | Soft demapper | Max-log LLR per bit, `log P(0)/P(1)`, in transmit bit order: (closest point with bit 1 − closest with bit 0)/ν. Equals `nrSymbolDemodulate`. |
 | `rx.ldpc_decode` | Channel decoder | Rate recovery → belief-propagation LDPC decoding (`LDPCMaxIterations`, default 25) → reassembly → CRC check. Returns the transport block and whether its CRC passed. |
-| `rx.receive` | Whole receiver | `'conventional'`: the chain above (LS at the pilots, linear interpolation, LMMSE equalization). `'knownH'`: true H instead of estimation and interpolation, with true timing (the true H belongs to the true timing: a one-sample shift rotates subcarrier k by 2πk/Nfft). Returns LLRs and every intermediate result. |
+| `rx.receive` | Whole receiver | `'conventional'`: the chain above (LS at the pilots, linear interpolation, LMMSE equalization). `'knownH'`: true H instead of estimation and interpolation, with true timing (the true H belongs to the true timing: a one-sample shift rotates subcarrier k by 2πk/Nfft). `'dpoi'` and its variants: the PA compensation baseline, see *PA compensation baseline* below. Returns LLRs and every intermediate result. |
+| `rx.delay_estimate` | Smoothed channel estimate | Fits the LS pilot estimates with delay taps inside a 2.4 µs window (ridge least squares) and evaluates them on every subcarrier. Used by the DPoI modes. |
+| `rx.dpoi` | Digital Post-Inverse | Equalize → oversampled IFFT → memory polynomial fitted to the slot's pilots → FFT. See below. |
 
 **Matches the paper's baseline.** Pihlajasalo et al. (IEEE TWC 2023, Sec. V) compare against
 two LMMSE receivers: one with an LS channel estimate at the DMRS, interpolated linearly over the
@@ -220,6 +222,92 @@ This gap to known H is what the neural receivers aim to close.
 |---|---|---|
 | `TimingEstimation` | `'dmrs'` | `'dmrs'` (estimated) or `'perfect'` (genie) |
 | `LDPCMaxIterations` | 25 | LDPC decoder iterations |
+
+### PA compensation baseline: Digital Post-Inverse (`'dpoi'`)
+
+The LMMSE receivers above do nothing about the PA, so a neural receiver's gain over them mixes
+PA compensation with better channel estimation. `'dpoi'` is a conventional receiver that does
+compensate the PA: the Digital Post-Inverse of Babaroglu et al., "Cellular Digital
+Post-Distortion: Signal Processing Methods and RF Measurements", IEEE WAMICON 2023. It is the
+model-based counterpart of the FTF-CNN: equalize, go to time, undo the PA, come back.
+
+```
+rx.sync → rx.ofdm_demod → rx.ls_estimate → rx.delay_estimate → LMMSE equalization (whole grid)
+        → 4×Nfft IFFT per symbol → memory polynomial x(n) = Σ c(p,d) q(n−d)|q(n−d)|^(p−1)
+        → FFT → rx.demap_llr
+```
+
+The coefficients c (orders 1, 3, 5, 7 and delays 0–4: 20 complex numbers) are fitted by least
+squares once per slot so that the output equals the known pilots. The receiver uses only the
+received samples and `ctx`: no PA model, no training, no decisions.
+
+```matlab
+llr = rx.receive(rxWaveform, ctx, 'dpoi');
+[llr, trace] = rx.receive(rxWaveform, ctx, 'dpoi', [], struct('Memory', 0));   % rx.dpoi options
+```
+
+| Mode | Channel | Coefficients fitted on | Use |
+|---|---|---|---|
+| `'dpoi'` | LS + delay-domain smoothing | this slot's pilots | the baseline |
+| `'smoothed'` | the same | none (no post-inverse) | `'dpoi'` minus `'smoothed'` is the post-inverse alone |
+| `'dpoi_knownH'` | true g·H, true timing | this slot's pilots | PA compensation without channel estimation error |
+| `'dpoi_genie'` | LS + delay-domain smoothing | the true grid, every RE | the best this post-inverse can do |
+
+**What differs from the paper**
+
+- **The channel estimate must be smoothed.** With per-pilot LS (the conventional receiver) the
+  equalized pilots equal the transmitted pilots exactly, because the PA distortion on each
+  pilot is absorbed into its channel estimate, and the fit finds nothing. The paper uses an
+  LMMSE channel estimate; here `rx.delay_estimate` fits the pilots with delay taps, which also
+  lowers the channel error by 3–7 dB at 20 dB SNR.
+- **The DMRS symbol also carries data.** The paper has a DMRS-only symbol and boosts it to
+  match the data symbols' envelope. Here every second subcarrier of the DMRS symbol is data.
+  The basis functions are built from the received symbol, so only the target needs known
+  values: the fit is made on the pilot subcarriers in frequency (156 equations in the default
+  link, 396 in the `mppa_common` link). No boosting is needed.
+- **LMMSE equalizer in front, bias removed after.** The post-inverse spreads the noise of
+  faded subcarriers over the whole symbol, so the equalizer holds it back, and the
+  per-subcarrier gain is divided out again after the FFT. The output is also rescaled so the
+  pilots come out with gain 1 (a least-squares inverse fitted on noisy input shrinks its
+  output, which the paper notes).
+- **Noise variance for the LLRs** is the error left at the pilots after the correction.
+
+**Measured** (uncoded BER, static TDL-C 300 ns, 6 slots, from `test_dpoi`):
+
+| Link | LMMSE | LMMSE smoothed | DPoI |
+|---|---|---|---|
+| Polynomial PA, 3 dB back-off, 16QAM, 30 dB | 0.0240 | 0.0091 | 0.0006 |
+| 3GPP MP PA, 3 dB back-off, 64QAM, 30 dB | 0.0753 | 0.0599 | 0.0326 |
+| No PA, 16QAM, 15 dB | 0.0166 | 0.0081 | 0.0084 |
+
+- **The gain is at medium and high SNR.** Without noise and with the true channel, the EVM
+  falls from 18.9 % to 10.1 % (polynomial PA) and from 15.0 % to 9.8 % (3GPP PA) at 3 dB
+  back-off; the genie fit reaches 9.8 % and 9.2 %. The rest cannot be inverted: samples clipped
+  at saturation, and the distortion outside the occupied band, which the receiver never sees.
+- **At low SNR it can cost a little.** In the default link at 5 dB the uncoded BER is about
+  0.005–0.01 higher than `'smoothed'`: 20 coefficients are fitted on 156 noisy pilots. The
+  larger `mppa_common` link shows no loss at 10 dB.
+- **Doppler limits it as it limits the LMMSE receiver.** With one DMRS symbol the channel
+  estimate ages over the slot; at 100 Hz and 15 kHz spacing that error is larger than the PA
+  distortion, and the post-inverse cannot help. `'dpoi_knownH'` shows the PA part alone.
+
+**Against the FTF-CNN** (`compare_snr({'ftf_mppa'}, ...)`, `mppa_common` link, TDL-C 300 ns,
+100 Hz, 10 unseen PAs, 30 slots per point; uncoded BER at 20 dB SNR):
+
+| Output back-off | LMMSE | LMMSE smoothed | DPoI | DPoI known H | `ftf_mppa` | LMMSE known H |
+|---|---|---|---|---|---|---|
+| 6 dB (`results/dpoi_vs_ftf_mppa`) | 0.0510 | 0.0394 | 0.0340 | – | 0.0294 | 0.0244 |
+| 2 dB (`results/dpoi_vs_ftf_mppa_bo2`) | 0.1460 | 0.1263 | 0.1036 | 0.0669 | 0.0629 | 0.1038 |
+
+At 6 dB the PA is mild: most of the FTF's margin over LMMSE is channel estimation, and DPoI
+comes within 0.005. At 2 dB the FTF is well ahead of DPoI with an estimated channel and level
+with DPoI given the true channel. BLER on 30 slots moves in steps of 0.033 and the default
+coded grid stops at 12 dB, below the 2 dB waterfall, so use more slots and `'CodedSNRs'` up to
+about 20 dB before quoting coded gains.
+
+`rx.dpoi` options (5th argument of `rx.receive`): `Orders` ([1 3 5 7]), `Memory` (4),
+`Oversampling` (4), `Ridge` (1e-2, pull towards no correction); `DelayWindow`
+([-0.4e-6 2e-6] s) and `DelayRidge` (1e-3) for `rx.delay_estimate`.
 
 ## Neural receivers (`+nn`)
 
@@ -611,6 +699,9 @@ compare_snr({'fcnn','models/old/fcnn_v1.mat'}, 'Labels',{'new','v1'}, ...
 - **Test link:** the **first** model's link (PA, Doppler, delay spread, channel model, SIR, …),
   changed with `'Link',{...}` (simo_config names). Put the model whose conditions you want
   first, or set them explicitly.
+- **PA compensation baselines:** with a PA on the test link, 'LMMSE smoothed' and 'DPoI' are
+  added (`rx.receive` modes `'smoothed'` and `'dpoi'`). `'Baselines'` chooses them: any of
+  `'smoothed'`, `'dpoi'`, `'dpoi_knownH'`, `'dpoi_genie'`, or `{}` for none.
 - **PA:** with a polynomial PA, slots cycle through the 10 **unseen validation PAs** saved in
   the models, so no model is tested on a PA it trained on. The back-off is the link's
   `PABackoffdB`, default 6 dB.
@@ -621,7 +712,7 @@ compare_snr({'fcnn','models/old/fcnn_v1.mat'}, 'Labels',{'new','v1'}, ...
   conditions and the options).
 
 Options: `'SNRs'` (0:4:32), `'Slots'` (30), `'Seed'` (5001, the first slot seed), `'Link'`,
-`'UsePABank'` (true), `'Labels'`, `'Name'` ('snr_sweep'). It runs on the CPU, so it can run
+`'UsePABank'` (true), `'Baselines'`, `'Labels'`, `'Name'` ('snr_sweep'). It runs on the CPU, so it can run
 next to a GPU training. With 30 slots, BLER moves in steps of 0.033. Use more slots for smooth
 BLER curves.
 
@@ -636,6 +727,7 @@ test_tcnn        % TCNN flows (CPU only, so it can run beside a GPU training)
 test_ftf         % frequency-domain hybrid: transforms, parameters, gradients, training (CPU, ~6 min)
 test_train       % training options: schedule, clipping, Resume, range test (CPU only)
 test_mppa        % 3GPP memory polynomial PA and 64QAM (see MPPA.md)
+test_dpoi        % Digital Post-Inverse baseline and channel smoothing (CPU, ~1 min)
 ```
 
 `test_chan` checks the channel against physics: Y = H·X for a static channel and growing intercarrier interference with Doppler, average channel power of 1
@@ -672,6 +764,17 @@ steadily, and the trained `models/fcnn.mat` beating the conventional receiver.
 - `train_receiver` with `InitFrom` and `Freeze` leaves the frozen FCNN unchanged;
 - on mixed conditions, `tcnn_feq` with the LLR calibration lowers the loss without raising the
   BER (without it, the BER rises).
+
+`test_dpoi` checks the PA compensation baseline:
+- `rx.delay_estimate` is closer to the true channel than LS with linear interpolation;
+- with per-pilot LS the equalized pilots are exact, so there is nothing to fit;
+- the frequency-domain implementation equals the paper's eq. (6) computed in time;
+- without a PA and noise, DPoI changes nothing;
+- with a PA, no noise and the true channel, the EVM falls, and the pilot fit is close to the
+  genie fit;
+- the noise estimate matches the error left on the data;
+- with a PA at 30 dB, DPoI's uncoded BER is below the same receiver without the post-inverse;
+- `compare_snr` adds the baselines.
 
 `test_train` checks the training options:
 - `nn.learning_rate`: the default is constant; warmup, hold, linear and cosine decay, and the
