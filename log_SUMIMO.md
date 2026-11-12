@@ -133,11 +133,10 @@ All runs on this machine, MATLAB at `D:\MATLAB`.
 4. **Guards** (`test_layers` part 5): the conventional receiver, `rx.equalize`, and the
    two invalid `link_config` combinations fail with a clear message.
 5. **Existing tests.** `test_tx`, `test_chan`, `test_rx`, `test_dpoi`, `test_mppa`:
-   all pass. `test_nn`, `test_ftf`, `test_tcnn`, `test_train`: see the note below.
+   all pass.
 
-Neural test scripts at the time of the first stage 0 commit: `test_nn` passed (all
-checks). `test_ftf`, `test_tcnn` and `test_train` were still running; their result is
-recorded here once they finish.
+`test_nn`, `test_ftf`, `test_tcnn` and `test_train` all pass as well (24 checks, 0
+failures). They finished after the first stage 0 commit `c776b3c`, on the same code.
 
 ### Not done in stage 0, and things to know
 
