@@ -5,9 +5,10 @@ function [slot, offset, metric] = sync(rxWaveform, ctx, perfectOffset)
 %   offset counts the samples before the slot start (0 = no delay).
 %   ctx.TimingEstimation selects the method:
 %     'dmrs'     correlate each antenna with the known pilot-only waveform
-%                (ctx.PilotWaveform) and take the lag with the largest
-%                power summed over antennas: the strongest path, which is
-%                also how the channel's true timing is defined.
+%                of each layer (ctx.PilotWaveform) and take the lag with the
+%                largest power summed over antennas and layers: the
+%                strongest path, which is also how the channel's true
+%                timing is defined.
 %     'perfect'  use perfectOffset, the channel's true timing (genie);
 %                for reference runs only.
 %   metric is the correlation power per lag (empty for 'perfect').
@@ -23,10 +24,14 @@ switch ctx.TimingEstimation
     case 'dmrs'
         % Cross-correlation r(d) = sum_t rx(t+d) conj(ref(t)) for d >= 0,
         % via FFT; the length avoids circular wrap-around.
-        ref = ctx.PilotWaveform;
-        n = 2^nextpow2(L + numel(ref));
-        r = ifft(fft(rxWaveform, n) .* conj(fft(ref, n)));
-        metric = sum(abs(r(1:maxLag+1, :)).^2, 2);
+        ref = ctx.PilotWaveform;           % One column per layer.
+        n = 2^nextpow2(L + size(ref, 1));
+        R = fft(rxWaveform, n);
+        metric = zeros(maxLag+1, 1);
+        for l = 1:size(ref, 2)
+            r = ifft(R .* conj(fft(ref(:, l), n)));
+            metric = metric + sum(abs(r(1:maxLag+1, :)).^2, 2);
+        end
         [~, peak] = max(metric);
         offset = peak - 1;
 end

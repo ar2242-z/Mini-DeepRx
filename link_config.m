@@ -1,6 +1,6 @@
 
 function cfg = link_config(varargin)
-%LINK_CONFIG Physical link settings: carrier, antennas, coding, PA, channel, noise.
+%LINK_CONFIG Physical link settings: carrier, antennas, layers, coding, PA, channel, noise.
 %   cfg = link_config() returns all default settings as a structure.
 %   cfg = link_config('SNRdB', 5, 'MaximumDopplerShift', 200)
 %   changes only the named settings; the others keep their defaults.
@@ -21,6 +21,12 @@ function cfg = link_config(varargin)
         @(x) isnumeric(x) && isscalar(x) && ismember(x,[15 30 60 120])); % kHz.
     addParameter(p,'Nfft',512,positiveInteger); % FFT size; room for channel filters.
     addParameter(p,'NumReceiveAntennas',2,positiveInteger);
+    % Transmit side. One layer from one antenna is SISO (one receive antenna)
+    % or SIMO; more layers are SU-MIMO spatial multiplexing: one user, one
+    % transport block mapped across the layers (TS 38.211 6.3.1.3). There is
+    % no precoder yet, so each layer goes to its own transmit antenna.
+    addParameter(p,'NumTransmitAntennas',1,positiveInteger);
+    addParameter(p,'NumLayers',1,@(x) positiveInteger(x) && x<=4);
     % 3GPP TR 38.901 channel: 'TDL-A'...'TDL-E' or 'CDL-A'...'CDL-E'.
     % D and E contain a line-of-sight component; A-C are non-line-of-sight.
     addParameter(p,'ChannelModel','TDL-C', ...
@@ -95,6 +101,10 @@ function cfg = link_config(varargin)
     cfg.PACoefficients = cfg.PACoefficients(:).'; % Row vector.
     cfg.MPCoefficients = reshape(cfg.MPCoefficients, 1, []);
     assert(cfg.NumResourceBlocks<=275,'NumResourceBlocks must not exceed 275.');
+    assert(cfg.NumLayers==cfg.NumTransmitAntennas, ...
+        'Without a precoder, NumLayers must equal NumTransmitAntennas.');
+    assert(cfg.NumLayers<=cfg.NumReceiveAntennas, ...
+        'NumLayers must not exceed NumReceiveAntennas.');
     assert(cfg.Nfft>12*cfg.NumResourceBlocks, ...
         'Nfft must exceed the number of active subcarriers (12*NumResourceBlocks).');
     assert(cfg.NumCDMGroupsWithoutData<=cfg.DMRSConfigurationType+1, ...

@@ -1,8 +1,8 @@
 # Mini DeepRx: link-level simulation in MATLAB
 
-A 5G uplink link-level simulation, currently one transmit antenna and two receive
-antennas (SIMO, single stream; `NumReceiveAntennas` sets the receive side), built to
-compare a conventional receiver with neural receivers
+A 5G uplink link-level simulation, by default one transmit antenna and two receive
+antennas (SIMO, single stream; `NumReceiveAntennas` sets the receive side, 1 gives SISO),
+built to compare a conventional receiver with neural receivers
 (TCNN, FCNN/DeepRx, and hybrids) on identical signals.
 
 The code is organised along the signal chain. Each physical processing block is
@@ -143,6 +143,7 @@ must not read them.
 | `MaximumDopplerShift` | 100 | Hz; 0 is a static channel |
 | `CarrierFrequency` | 3.5e9 | Hz (CDL only) |
 | `NumReceiveAntennas` | 2 | Receive antennas |
+| `NumTransmitAntennas`, `NumLayers` | 1, 1 | SU-MIMO in progress (see `log_SUMIMO.md`): the transmitter, channel, labels and network input already handle more than one layer; the receivers handle one layer so far |
 | `SNRdB` | 10 | Es/N0 per resource element per antenna; `Inf` = no noise |
 | `SIRdB` | `Inf` | Signal-to-interference ratio; `Inf` = no interferer |
 | `Seed` | 42 | Fixes the fading realization (and the interferer) |
@@ -731,6 +732,7 @@ test_ftf         % frequency-domain hybrid: transforms, parameters, gradients, t
 test_train       % training options: schedule, clipping, Resume, range test (CPU only)
 test_mppa        % 3GPP memory polynomial PA and 64QAM (see MPPA.md)
 test_dpoi        % Digital Post-Inverse baseline and channel smoothing (CPU, ~1 min)
+test_layers      % one layer unchanged against stored checksums; two-layer shapes (CPU, ~1 min)
 ```
 
 `test_chan` checks the channel against physics: Y = H·X for a static channel and growing intercarrier interference with Doppler, average channel power of 1

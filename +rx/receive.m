@@ -40,8 +40,9 @@ function [llr, trace] = receive(rxWaveform, ctx, mode, genie, options)
 %   timing uses nothing but rxWaveform and ctx.
 %   options: struct of rx.dpoi options (Orders, Memory, Oversampling, Ridge)
 %   plus DelayWindow and DelayRidge for rx.delay_estimate; DPoI modes only.
-%   llr: (Q*D) x 1 LLRs, log P(0)/P(1), in transmit bit order; pass to
-%   rx.ldpc_decode when coded.
+%   llr: (Q*L*D) x 1 LLRs, log P(0)/P(1), in transmit bit order; pass to
+%   rx.ldpc_decode when coded. Every mode handles one layer (L = 1) for
+%   now: rx.ls_estimate and rx.equalize reject more.
 %   trace: Offset, Y, Hp, H, Sigma2, Xhat, Nu (the receiver checkpoints),
 %   and DPoI (rx.dpoi's info) in the DPoI modes.
 if nargin < 4 || isempty(genie)

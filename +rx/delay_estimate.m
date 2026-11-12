@@ -2,7 +2,7 @@ function [H, dof] = delay_estimate(Hp, ctx, window, ridge)
 %DELAY_ESTIMATE Smoothed channel estimate: LS pilots fitted by a few delay taps.
 %   [H, dof] = rx.delay_estimate(Hp, ctx)
 %   [H, dof] = rx.delay_estimate(Hp, ctx, window, ridge)
-%   Hp: P x K x Nr x B from rx.ls_estimate; H: F x N x Nr x B.
+%   Hp: P x K x Nr x B x L from rx.ls_estimate; H: F x N x Nr x B x L.
 %   The channel is a sum of paths with delays inside `window` = [first last]
 %   in seconds relative to the synchronized (strongest) path, on the
 %   receiver's sample grid:

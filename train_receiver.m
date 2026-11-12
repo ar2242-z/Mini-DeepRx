@@ -61,15 +61,16 @@ trainingData = @(epoch) nn.make_data(baseCfg, ncfg, trainingPlan(trainingPlan.Ep
 
 % 3. Networks: fresh (FCNN first, so it starts the same in every flow),
 % then any loaded from InitFrom; Freeze keeps networks fixed.
-inputSize = [ctx.NumSubcarriers ctx.NumSymbols 2*(2*baseCfg.NumReceiveAntennas + 1)];
+inputSize = nn.fcnn_input_size(ctx);
+numPlanes = ctx.BitsPerSymbol * ctx.NumLayers; % Network outputs: the bits of every layer.
 tcnnInputSize = nn.tcnn_input_size(ctx);
 rng(ncfg.InitializationSeed, 'twister');
 params = struct();
 if ismember('fcnn', flow.Networks)
     if isempty(ncfg.Widths)
-        params.fcnn = nn.fcnn(inputSize, ctx.BitsPerSymbol);
+        params.fcnn = nn.fcnn(inputSize, numPlanes);
     else
-        params.fcnn = nn.fcnn(inputSize, ctx.BitsPerSymbol, ncfg.Widths, ncfg.Dilations);
+        params.fcnn = nn.fcnn(inputSize, numPlanes, ncfg.Widths, ncfg.Dilations);
     end
 end
 if ismember('tcnn', flow.Networks)
@@ -85,7 +86,7 @@ end
 if ismember('ftf_f1', flow.Networks)
     M = ncfg.FTFTransformSize;
     if isempty(M), M = ctx.Nfft; end
-    nets = nn.ftf_cnn(inputSize, ctx.BitsPerSymbol, M, ncfg.Widths, ncfg.Dilations, ...
+    nets = nn.ftf_cnn(inputSize, numPlanes, M, ncfg.Widths, ncfg.Dilations, ...
         ncfg.FTFSplit, ncfg.FTFTimeDilations);
     for name = fieldnames(nets).'
         params.(name{1}) = nets.(name{1});

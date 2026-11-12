@@ -160,7 +160,7 @@ end
 
 function batch = makeBatch(data, idx, useGPU)
     batch.Slots = data.Slots(:, :, idx);
-    batch.PilotGrid = data.PilotGrid(:, :, :, idx);
+    batch.PilotGrid = data.PilotGrid(:, :, :, idx, :);
     batch.Labels = data.Labels(:, :, :, idx);
     batch.Mask = single(data.Mask(:, :, :, idx));
     for f = {'Slots','PilotGrid','Labels','Mask'}

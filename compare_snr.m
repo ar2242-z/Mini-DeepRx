@@ -212,10 +212,12 @@ end
 function checkLink(model, cfg, name)
     if ~isfield(model, 'LinkConfig'), return; end
     fields = {'Modulation','NumResourceBlocks','SubcarrierSpacing','Nfft','NumReceiveAntennas', ...
+        'NumTransmitAntennas','NumLayers', ...
         'DMRSTypeAPosition','DMRSLength','DMRSAdditionalPosition','DMRSConfigurationType', ...
         'NumCDMGroupsWithoutData'};
+    trained = sim.override(model.LinkConfig, struct()); % Settings newer than the model get their defaults.
     for f = fields
-        a = model.LinkConfig.(f{1}); b = cfg.(f{1});
+        a = trained.(f{1}); b = cfg.(f{1});
         assert(isequal(a, b), '%s was trained with %s = %s, but the test link has %s.', ...
             name, f{1}, mat2str(a), mat2str(b));
     end

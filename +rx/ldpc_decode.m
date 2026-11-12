@@ -8,8 +8,10 @@ function [tb, crcOK, info] = ldpc_decode(llr, code, maxIterations)
 %   tb is a column of 0/1; crcOK is true when the transport block CRC passes.
 %   info.CodeBlockCRCOK gives the per-code-block CRC (multi-block only).
 assert(numel(llr) == code.G, 'Expected %d LLRs, got %d.', code.G, numel(llr));
+numLayers = 1;      % A code saved before layers existed has one.
+if isfield(code, 'NumLayers'), numLayers = code.NumLayers; end
 recovered = nrRateRecoverLDPC(double(llr(:)), code.TBS, code.TargetCodeRate, ...
-    code.RV, code.Modulation, 1);
+    code.RV, code.Modulation, numLayers);
 decoded = nrLDPCDecode(recovered, code.BGN, maxIterations);
 [blk, blockErrors] = nrCodeBlockDesegmentLDPC(decoded, code.BGN, code.TBS + code.L);
 [tb, remainder] = nrCRCDecode(blk, code.CRC);

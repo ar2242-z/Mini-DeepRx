@@ -1,7 +1,7 @@
 function [rxWaveform, out] = fading(waveform, carrier, cfg, seed)
 %FADING Multipath fading channel (3GPP TR 38.901 TDL or CDL) in time.
 %   [rxWaveform, out] = chan.fading(waveform, carrier, cfg, seed) passes the
-%   transmit waveform (one column, one antenna) through a time-varying
+%   transmit waveform (one column per transmit antenna) through a time-varying
 %   channel to cfg.NumReceiveAntennas receive antennas. Physically: the signal
 %   arrives over several delayed, attenuated paths, each with its own Doppler
 %   (cfg.MaximumDopplerShift), so the channel is frequency selective and
@@ -9,8 +9,11 @@ function [rxWaveform, out] = fading(waveform, carrier, cfg, seed)
 %   is not cut off; rxWaveform therefore has out.Padding extra samples.
 %   seed fixes the fading realization. Average channel power is one.
 %   out holds the truth used for evaluation and the known-H baseline:
-%     H              subcarrier x symbol x antenna channel response, using
-%                    the perfect timing below
+%     H              F x N x Nr x 1 x Nt channel response (subcarrier,
+%                    symbol, receive antenna, -, transmit antenna), using
+%                    the perfect timing below. Dimension 4 is left for the
+%                    batch, as everywhere in the receiver; with one
+%                    transmit antenna H is F x N x Nr.
 %     TimingOffset   samples from the start of rxWaveform to the start of
 %                    the slot (strongest-path timing, a genie value)
 %     SampleRate, Padding, PathDelays, AveragePathGainsDB
@@ -20,7 +23,7 @@ channelInfo = info(channel);
 % Multipath and filtering delay the signal; padding flushes the last symbol.
 padding = ceil(max(channelInfo.PathDelays)*ofdm.SampleRate) ...
     + channelInfo.ChannelFilterDelay;
-[rxWaveform, pathGains, sampleTimes] = channel([waveform; zeros(padding,1)]);
+[rxWaveform, pathGains, sampleTimes] = channel([waveform; zeros(padding,size(waveform,2))]);
 pathFilters = getPathFilters(channel);
 release(channel);
 
@@ -28,7 +31,7 @@ offset = nrPerfectTimingEstimate(pathGains, pathFilters);
 numSymbols = carrier.SymbolsPerSlot;
 H = nrPerfectChannelEstimate(carrier, pathGains, pathFilters, ...
     offset, sampleTimes, 'Nfft', cfg.Nfft);
-out.H = H(:,1:numSymbols,:,1); % This slot; the only transmit antenna.
+out.H = permute(H(:,1:numSymbols,:,:),[1 2 3 5 4]); % This slot; Nt in dimension 5.
 out.TimingOffset = offset;
 out.SampleRate = ofdm.SampleRate;
 out.Padding = padding;
@@ -41,7 +44,7 @@ function channel = makeChannel(cfg, sampleRate, seed)
     % CDL: clustered paths with angles, antennas set by array geometry.
     if startsWith(cfg.ChannelModel,'TDL')
         channel = nrTDLChannel;
-        channel.NumTransmitAntennas = 1;   % Single stream for now (no MIMO yet).
+        channel.NumTransmitAntennas = cfg.NumTransmitAntennas;
         channel.NumReceiveAntennas = cfg.NumReceiveAntennas;
         channel.MIMOCorrelation = 'Low';
     else
@@ -53,7 +56,7 @@ function channel = makeChannel(cfg, sampleRate, seed)
         % for all ten models. The toolbox default slants a single element at
         % 45 degrees, which captures only about half the power of CDL's
         % cross-polarized rays (measured 0.50-0.60).
-        channel.TransmitAntennaArray.Size = [1 1 1 1 1];   % Single stream for now.
+        channel.TransmitAntennaArray.Size = [1 cfg.NumTransmitAntennas 1 1 1];
         channel.TransmitAntennaArray.Element = 'isotropic';
         channel.TransmitAntennaArray.PolarizationAngles = [0 90];
         channel.ReceiveAntennaArray.Size = [1 cfg.NumReceiveAntennas 1 1 1];

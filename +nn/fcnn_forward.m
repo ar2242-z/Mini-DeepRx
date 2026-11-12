@@ -2,10 +2,10 @@ function [logits, states] = fcnn_forward(params, batch, training, ctx)
 %FCNN_FORWARD FCNN receiver from synced slot samples to bit logits.
 %   [logits, states] = nn.fcnn_forward(params, batch, training, ctx)
 %     rx.ofdm_demod -> nn.deeprx_features -> params.fcnn
-%   batch.Slots: SlotLength x Nr x B; batch.PilotGrid: F x N x 1 x B.
+%   batch.Slots: SlotLength x Nr x B; batch.PilotGrid: F x N x 1 x B x L.
 %   training true (or a cell of names containing 'fcnn', see
 %   nn.in_training) uses forward (updates batch-norm statistics, returned
-%   in states.fcnn); otherwise predict. logits: F x N x Q x B, unformatted.
+%   in states.fcnn); otherwise predict. logits: F x N x (Q*L) x B, unformatted.
 %   ctx supplies the FFT window only, which is the same for every pilot
 %   layout. This is the forward function nn.train expects.
 Y = rx.ofdm_demod(batch.Slots, ctx);

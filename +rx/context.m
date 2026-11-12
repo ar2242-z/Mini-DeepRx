@@ -7,16 +7,26 @@ function ctx = context(cfg)
 %   the received waveform. Build it once and reuse it for every slot.
 %   Fields:
 %     Carrier, Nfft, NumSubcarriers (F), NumSymbols (N), NumReceiveAntennas
+%     NumLayers (L), NumTransmitAntennas
 %     CyclicPrefixLengths, SlotLength      samples per slot including CPs
 %     WindowIndices   Nfft x N: sample indices of each symbol's FFT window,
 %                     starting halfway into its CP
 %     ActiveBins      F x 1: FFT bins of the occupied subcarriers
 %     PhaseCorrection F x N: undoes the early FFT window start
-%     DataIndices, PilotIndices, PilotGrid, DataMask, PilotMask
-%     PilotRows (P), PilotCols (K), PilotValues P x K
+%     DataIndices     D x 1 data REs (indices into F x N), the same for
+%                     every layer
+%     PilotIndices    pilot positions, one column per layer (indices into
+%                     the F x N x L layer grid)
+%     PilotGrid       F x N x 1 x 1 x L known pilots of each layer's DMRS
+%                     port, zero elsewhere. The layer is dimension 5:
+%                     dimension 3 is the receive antenna and 4 the batch
+%                     everywhere in the receiver. One layer: F x N.
+%     DataMask, PilotMask   F x N; PilotMask marks the pilots of any layer
+%     PilotRows (P), PilotCols (K), PilotValues P x K x 1 x 1 x L
 %     FrequencyInterp F x P, TimeInterp N x K   linear interpolation
 %     SecondDifference  rows [1 -2 1] over equally spaced pilots
-%     PilotWaveform   pilot-only transmit waveform, the sync reference
+%     PilotWaveform   pilot-only transmit waveform of each layer (one
+%                     column per layer), the sync reference
 %     Modulation, BitsPerSymbol, LDPCMaxIterations, TimingEstimation
 carrier = tx.carrier(cfg);
 ofdm = nrOFDMInfo(carrier, 'Nfft', cfg.Nfft);
@@ -30,6 +40,8 @@ ctx.Nfft = Nfft;
 ctx.NumSubcarriers = F;
 ctx.NumSymbols = N;
 ctx.NumReceiveAntennas = cfg.NumReceiveAntennas;
+ctx.NumLayers = cfg.NumLayers;
+ctx.NumTransmitAntennas = cfg.NumTransmitAntennas;
 ctx.CyclicPrefixLengths = cp;
 ctx.SlotLength = sum(cp) + N*Nfft;
 
@@ -47,22 +59,24 @@ ctx.PhaseCorrection = exp(2i*pi*k*early/Nfft);
 
 % Data and pilot layout, and the known pilot values.
 res = tx.resources(carrier, cfg);
-ctx.DataIndices = res.DataIndices;
+L = cfg.NumLayers;
+ctx.DataIndices = res.DataIndices(:, 1); % Layer 1 is plane 1: plain RE indices.
 ctx.PilotIndices = res.PilotIndices;
-ctx.PilotGrid = complex(zeros(F, N));
-ctx.PilotGrid(res.PilotIndices) = res.Pilots;
+layerPilots = complex(zeros(F, N, L));
+layerPilots(res.PilotIndices) = res.Pilots;
+ctx.PilotGrid = reshape(layerPilots, F, N, 1, 1, L);
 ctx.DataMask = false(F, N);
-ctx.DataMask(res.DataIndices) = true;
-ctx.PilotMask = false(F, N);
-ctx.PilotMask(res.PilotIndices) = true;
+ctx.DataMask(ctx.DataIndices) = true;
+ctx.PilotMask = any(layerPilots ~= 0, 3);
 cols = find(any(ctx.PilotMask, 1));
 rows = find(ctx.PilotMask(:, cols(1)));
 assert(isequal(ctx.PilotMask(:, cols), repmat(ctx.PilotMask(:, cols(1)), 1, numel(cols))), ...
     'All pilot symbols must use the same subcarriers.');
 ctx.PilotRows = rows;
 ctx.PilotCols = cols;
-ctx.PilotValues = ctx.PilotGrid(rows, cols);
-assert(all(abs(abs(ctx.PilotValues(:)) - 1) < 1e-10), 'The receiver expects unit-power pilots.');
+ctx.PilotValues = ctx.PilotGrid(rows, cols, :, :, :);
+assert(all(abs(abs(ctx.PilotValues(:)) - 1) < 1e-10), ...
+    'The receiver expects unit-power pilots on the same resource elements for every layer.');
 
 % Interpolation from pilots to the grid, as matrices (the paper's
 % DMRS-based baseline):
@@ -91,7 +105,7 @@ end
 assert(~isempty(D), 'Noise estimation needs at least three equally spaced pilots.');
 ctx.SecondDifference = D;
 
-ctx.PilotWaveform = tx.ofdm_mod(carrier, ctx.PilotGrid, Nfft);
+ctx.PilotWaveform = tx.ofdm_mod(carrier, layerPilots, Nfft);
 ctx.Modulation = cfg.Modulation;
 ctx.BitsPerSymbol = tx.bits_per_symbol(cfg.Modulation);
 ctx.LDPCMaxIterations = cfg.LDPCMaxIterations;

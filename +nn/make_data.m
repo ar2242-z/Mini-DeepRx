@@ -6,9 +6,10 @@ function data = make_data(baseCfg, ncfg, plan, keepTruth)
 %   samples serves every receiver: FCNN applies the FFT, TCNN works before it.
 %   data fields (S = number of slots):
 %     Slots      SlotLength x Nr x S single, synced received samples
-%     PilotGrid  F x N x 1 x S single, known pilots of each slot's layout
-%     Labels     F x N x Q x S single coded-bit planes (nn.labels)
-%     Mask       F x N x Q x S logical, data REs
+%     PilotGrid  F x N x 1 x S x L single, known pilots of each slot's
+%                layout, per layer (one layer: F x N x 1 x S)
+%     Labels     F x N x (Q*L) x S single coded-bit planes (nn.labels)
+%     Mask       F x N x (Q*L) x S logical, data REs
 %     PilotIndex S x 1, Contexts (rx.context per pilot layout), Plan
 %     Truth      S x 1 struct (InfoBits, CodedBits, Code) when keepTruth,
 %                for coded evaluation (BLER)
@@ -20,9 +21,9 @@ for k = 1:numel(ncfg.PilotConfigs)
 end
 c = contexts(1);
 S = height(plan);
-Q = c.BitsPerSymbol;
+Q = c.BitsPerSymbol * c.NumLayers;   % Bit planes of all layers.
 data.Slots = complex(zeros(c.SlotLength, c.NumReceiveAntennas, S, 'single'));
-data.PilotGrid = complex(zeros(c.NumSubcarriers, c.NumSymbols, 1, S, 'single'));
+data.PilotGrid = complex(zeros(c.NumSubcarriers, c.NumSymbols, 1, S, c.NumLayers, 'single'));
 data.Labels = zeros(c.NumSubcarriers, c.NumSymbols, Q, S, 'single');
 data.Mask = false(c.NumSubcarriers, c.NumSymbols, Q, S);
 data.PilotIndex = plan.PilotIndex;
@@ -34,7 +35,7 @@ for s = 1:S
     ctx = contexts(plan.PilotIndex(s));
     [rxWaveform, t] = sim.run_link(cfg);
     data.Slots(:, :, s) = rx.sync(rxWaveform, ctx, t.TimingOffset);
-    data.PilotGrid(:, :, 1, s) = ctx.PilotGrid;
+    data.PilotGrid(:, :, 1, s, :) = ctx.PilotGrid;
     [data.Labels(:, :, :, s), data.Mask(:, :, :, s)] = nn.labels(t.CodedBits, ctx);
     if keepTruth
         truth(s).InfoBits = t.InfoBits;

@@ -64,6 +64,7 @@ for name = fieldnames(options).'
     opt.(name{1}) = options.(name{1});
 end
 assert(size(Y, 4) == 1, 'rx.dpoi works on one slot at a time.');
+assert(ctx.NumLayers == 1 && size(H, 5) == 1, 'rx.dpoi handles one layer only.');
 assert(opt.Orders(1) == 1, 'The first order must be 1 (the linear term).');
 F = ctx.NumSubcarriers; N = ctx.NumSymbols;
 

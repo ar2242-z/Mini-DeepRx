@@ -1,7 +1,7 @@
 function llr = calibrate_llr(net, llr, nu)
 %CALIBRATE_LLR Apply the learned LLR calibration (see nn.llr_calibration).
 %   llr = nn.calibrate_llr(net, llr, nu)
-%   llr: (Q*D) x B from rx.demap_llr, nu: D x B from rx.equalize.
+%   llr: (Q*L*D) x B from rx.demap_llr, nu: (L*D) x B from rx.equalize.
 %       LLR' = a * LLR * nu / (nu + eps),  [log a; log eps] = Gain*W + b
 %   Max-log LLRs are proportional to 1/nu, so this is exactly the demapper
 %   run with noise variance (nu + eps)/a. Reads the network's learnables

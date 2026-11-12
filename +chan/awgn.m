@@ -2,8 +2,9 @@ function [noise, noiseVariance] = awgn(numSamples, cfg, stream)
 %AWGN Receiver thermal noise: white circular Gaussian time samples.
 %   [noise, noiseVariance] = chan.awgn(numSamples, cfg, stream) returns
 %   numSamples x cfg.NumReceiveAntennas noise samples, independent per
-%   antenna. SNR is Es/N0 per occupied resource element per antenna,
-%   averaged over channel realizations (unit symbol energy, unit average
+%   antenna. SNR is Es/N0 per occupied resource element per receive antenna,
+%   averaged over channel realizations (unit total transmit energy per
+%   resource element, summed over the transmit antennas, and unit average
 %   channel power): N0 = 10^(-SNRdB/10). The receiver FFT is unscaled, so
 %   variance N0/Nfft per time sample gives N0 on every FFT bin.
 %   cfg.SNRdB = Inf returns zeros. noiseVariance is N0 (per FFT bin).
