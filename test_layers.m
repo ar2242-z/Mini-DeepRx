@@ -15,7 +15,10 @@ function passed = test_layers(action)
 %    mapping against nrLayerMap, total transmit power, and the received
 %    grid against sum over layers of H .* X (the layout of truth.H).
 % 4. Two layers through labels and LLR order, with LDPC: oracle LLRs decode.
-% 5. What is not implemented yet fails with a clear message.
+% 5. Two layers with the known channel (stage 1): rx.equalize against a
+%    per-RE reference, its one-layer limit, and the 'knownH' receiver end
+%    to end (noiseless symbols, noise estimate, LDPC decoding).
+% 6. What is not implemented yet fails with a clear message.
 
 if nargin < 1, action = 'check'; end
 passed = true;
@@ -145,12 +148,68 @@ Z = nn.deeprx_features(rx.ofdm_demod(rx.sync(rxWaveform,ctx),ctx),ctx.PilotGrid)
 passed = report(isequal(size(Z),nn.fcnn_input_size(ctx)), ...
     sprintf('nn.deeprx_features gives %s',mat2str(size(Z)))) && passed;
 
-%% 5. Not implemented yet: clear errors
-fprintf('5. Not implemented yet\n');
+%% 5. Two layers with the known channel: MIMO LMMSE detection
+fprintf('5. Two layers: MIMO LMMSE detection with the known channel\n');
+% rx.equalize against the textbook formulas, one RE at a time.
+rng(1);
+D = numel(ctx.DataIndices);
+for Nr = [2 4]
+    B = 2; sig = reshape([0.05 0.3],1,1,1,B);
+    Hr = (randn(F,N,Nr,B,L) + 1i*randn(F,N,Nr,B,L))/sqrt(2);
+    Yr = (randn(F,N,Nr,B) + 1i*randn(F,N,Nr,B))/sqrt(2);
+    [xhat,nu] = rx.equalize(Yr,Hr,sig,ctx);
+    xRef = zeros(L*D,B); nuRef = xRef;
+    for b = 1:B
+        for i = 1:D
+            [f,n] = ind2sub([F N],ctx.DataIndices(i));
+            h = reshape(Hr(f,n,:,b,:),Nr,L); y = reshape(Yr(f,n,:,b),Nr,1);
+            Ai = inv(h'*h + sig(b)*eye(L));
+            mu = real(diag(Ai*(h'*h)));
+            xRef(L*(i-1)+(1:L),b) = (Ai*h'*y)./mu;
+            nuRef(L*(i-1)+(1:L),b) = (1-mu)./mu;
+        end
+    end
+    err = max(relErr(xhat,xRef),relErr(nu,nuRef));
+    passed = report(err < 1e-10,sprintf('rx.equalize, %d x 2, batch of 2, versus per-RE inv(H''H+s*I)*H''*y: %.1e',Nr,err)) && passed;
+end
+% A layer whose channel is zero leaves the other layer's LMMSE = MRC.
+Hz = Hr(:,:,:,:,1); Hz(:,:,:,:,2) = 0;
+[xhat,nu] = rx.equalize(Yr,Hz,sig,ctx);
+ctx1 = ctx; ctx1.NumLayers = 1;
+[x1,nu1] = rx.equalize(Yr,Hz(:,:,:,:,1),sig,ctx1);
+err = max(relErr(xhat(1:L:end,:),x1),relErr(nu(1:L:end,:),nu1));
+passed = report(err < 1e-12,sprintf('second layer silent: first layer equals the one-layer equalizer: %.1e',err)) && passed;
+
+% Noiseless static link: the detected symbols are the transmitted ones.
+cfg = link_config(two{:},'Modulation','16QAM','SNRdB',Inf,'MaximumDopplerShift',0);
+ctx = rx.context(cfg);
+[rxWaveform,truth,trace] = sim.run_link(cfg);
+[~,t] = rx.receive(rxWaveform,ctx,'knownH',truth);
+% truth.H matches the channel to about 1e-3 (part 3), so this is an RMS
+% check (EVM): the worst single RE is amplified by poorly conditioned H.
+evm = rms(t.Xhat - trace.Tx.Symbols)/rms(trace.Tx.Symbols);
+passed = report(evm < 1e-2 && t.Sigma2 < 1e-4,sprintf( ...
+    'knownH, no noise, static: EVM %.1f dB, noise estimate %.1e',20*log10(evm),t.Sigma2)) && passed;
+
+% Coded, 20 dB, TDL-C at 100 Hz: decodes, and the pilot noise estimate is close.
+for modulation = {'QPSK','16QAM'}
+    cfg = link_config(two{:},'Modulation',modulation{1},'Coding','ldpc','SNRdB',20);
+    ctx = rx.context(cfg);
+    [rxWaveform,truth] = sim.run_link(cfg);
+    [llr,t] = rx.receive(rxWaveform,ctx,'knownH',truth);
+    r = sim.evaluate(llr,truth,cfg);
+    ratio = t.Sigma2/truth.NoiseVariance;
+    passed = report(r.BlockError == 0 && ratio > 0.8 && ratio < 1.5,sprintf( ...
+        '%-5s knownH at 20 dB: uncoded BER %.4f, CRC passes; noise estimate / true %.2f', ...
+        modulation{1},r.UncodedErrors/r.UncodedBits,ratio)) && passed;
+end
+
+%% 6. Not implemented yet: clear errors
+fprintf('6. Not implemented yet\n');
 passed = report(fails(@() rx.receive(rxWaveform,ctx,'conventional'),'DMRS ports'), ...
     'conventional receiver with two layers: rx.ls_estimate refuses') && passed;
-passed = report(fails(@() rx.equalize(zeros(F,N,2),zeros(F,N,2,1,2),1,ctx),'one layer'), ...
-    'rx.equalize with two layers refuses') && passed;
+passed = report(fails(@() rx.receive(rxWaveform,ctx,'dpoi_knownH',truth),'one layer'), ...
+    'DPoI with two layers: rx.dpoi refuses') && passed;
 passed = report(fails(@() link_config('NumLayers',2),'NumTransmitAntennas'), ...
     'two layers from one transmit antenna: link_config refuses') && passed;
 passed = report(fails(@() link_config('NumLayers',2,'NumTransmitAntennas',2,'NumReceiveAntennas',1),'NumReceiveAntennas'), ...

@@ -20,7 +20,13 @@ function [llr, trace] = receive(rxWaveform, ctx, mode, genie, options)
 %                     subcarrier for the memory polynomial PA); a perfect
 %                     estimator would measure g.*H at the pilots, so this
 %                     mode uses g.*H too. The distortion itself stays an
-%                     impairment.
+%                     impairment. With Nt transmit antennas the data sees
+%                     g.*H/sqrt(Nt) (tx.transmit's power scaling), so that
+%                     is the channel used. With more than one layer the
+%                     DMRS ports cannot be separated yet (rx.ls_estimate),
+%                     so the noise power comes instead from the pilot
+%                     residual with the true channel (pilotNoise below);
+%                     detection is the per-RE MIMO LMMSE of rx.equalize.
 %     'dpoi'          Digital Post-Inverse (Babaroglu et al., WAMICON 2023),
 %                     the conventional receiver-side PA compensation: LS at
 %                     the pilots -> delay-domain smoothing (rx.delay_estimate)
@@ -41,8 +47,9 @@ function [llr, trace] = receive(rxWaveform, ctx, mode, genie, options)
 %   options: struct of rx.dpoi options (Orders, Memory, Oversampling, Ridge)
 %   plus DelayWindow and DelayRidge for rx.delay_estimate; DPoI modes only.
 %   llr: (Q*L*D) x 1 LLRs, log P(0)/P(1), in transmit bit order; pass to
-%   rx.ldpc_decode when coded. Every mode handles one layer (L = 1) for
-%   now: rx.ls_estimate and rx.equalize reject more.
+%   rx.ldpc_decode when coded. 'knownH' handles any number of layers;
+%   the other modes handle one layer (L = 1) for now: rx.ls_estimate
+%   (DMRS port separation) and rx.dpoi reject more.
 %   trace: Offset, Y, Hp, H, Sigma2, Xhat, Nu (the receiver checkpoints),
 %   and DPoI (rx.dpoi's info) in the DPoI modes.
 if nargin < 4 || isempty(genie)
@@ -62,11 +69,17 @@ else
     [slot, trace.Offset] = rx.sync(rxWaveform, ctx);
 end
 Y = rx.ofdm_demod(slot, ctx);
-[Hp, sigma2] = rx.ls_estimate(Y, ctx);
 if trueChannel
     assert(isfield(genie, 'H'), '%s needs the true channel genie.H.', mode);
     H = genie.H;
     if isfield(genie, 'PAGain'), H = H .* genie.PAGain; end
+    if ctx.NumTransmitAntennas > 1, H = H / sqrt(ctx.NumTransmitAntennas); end
+end
+if trueChannel && ctx.NumLayers > 1
+    Hp = [];
+    sigma2 = pilotNoise(Y, H, ctx);
+else
+    [Hp, sigma2] = rx.ls_estimate(Y, ctx);
 end
 switch mode
     case 'conventional'
@@ -104,4 +117,18 @@ trace.H = H;
 trace.Sigma2 = sigma2;
 trace.Xhat = xhat;
 trace.Nu = nu;
+end
+
+function sigma2 = pilotNoise(Y, H, ctx)
+    % Noise (plus interference and PA distortion) power per RE from the
+    % pilots, given the true channel: the residual Y - sum_l H_l X_l at
+    % the pilot REs, averaged over pilots, pilot symbols and antennas.
+    % 1 x 1 x 1 x B. Used by 'knownH' with several layers, whose DMRS
+    % ports share their REs and so defeat rx.ls_estimate's estimate.
+    B = size(Y, 4);
+    Yp = Y(ctx.PilotRows, ctx.PilotCols, :, :);
+    Hp = H(ctx.PilotRows, ctx.PilotCols, :, :, :);
+    r = Yp - sum(Hp .* ctx.PilotValues, 5);
+    r = reshape(r, [], B);
+    sigma2 = reshape(mean(real(r).^2 + imag(r).^2, 1), 1, 1, 1, B);
 end
