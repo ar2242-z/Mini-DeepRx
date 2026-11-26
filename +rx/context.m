@@ -22,9 +22,16 @@ function ctx = context(cfg)
 %                     dimension 3 is the receive antenna and 4 the batch
 %                     everywhere in the receiver. One layer: F x N.
 %     DataMask, PilotMask   F x N; PilotMask marks the pilots of any layer
-%     PilotRows (P), PilotCols (K), PilotValues P x K x 1 x 1 x L
-%     FrequencyInterp F x P, TimeInterp N x K   linear interpolation
-%     SecondDifference  rows [1 -2 1] over equally spaced pilots
+%     PilotRows       P x L pilot subcarriers of each layer (one column per
+%                     layer: with DMRS ports in different CDM groups the
+%                     layers sit on different subcarriers)
+%     PilotCols (K), PilotValues P x K x 1 x 1 x L
+%     PilotsSeparable true when no two layers share a pilot RE, so per-RE
+%                     LS separates the layers (always true for one layer);
+%                     false for ports of one CDM group (code division)
+%     FrequencyInterp F x P x L, TimeInterp N x K   linear interpolation
+%     SecondDifference  rows [1 -2 1] over equally spaced pilots (the
+%                     same for every layer)
 %     PilotWaveform   pilot-only transmit waveform of each layer (one
 %                     column per layer), the sync reference
 %     Modulation, BitsPerSymbol, LDPCMaxIterations, TimingEstimation
@@ -69,22 +76,37 @@ ctx.DataMask = false(F, N);
 ctx.DataMask(ctx.DataIndices) = true;
 ctx.PilotMask = any(layerPilots ~= 0, 3);
 cols = find(any(ctx.PilotMask, 1));
-rows = find(ctx.PilotMask(:, cols(1)));
-assert(isequal(ctx.PilotMask(:, cols), repmat(ctx.PilotMask(:, cols(1)), 1, numel(cols))), ...
-    'All pilot symbols must use the same subcarriers.');
+P = nnz(layerPilots(:, cols(1), 1));
+rows = zeros(P, L);
+values = complex(zeros(P, numel(cols), 1, 1, L));
+for l = 1:L
+    mask = layerPilots(:, :, l) ~= 0;
+    r = find(mask(:, cols(1)));
+    assert(isequal(find(any(mask, 1)), cols) && numel(r) == P && ...
+        isequal(mask(:, cols), repmat(mask(:, cols(1)), 1, numel(cols))), ...
+        'Every layer must have its pilots in the same symbols, on the same subcarriers in each.');
+    assert(isequal(diff(r), diff(rows(:, 1))) || l == 1, ...
+        'Every layer''s pilots must have the same subcarrier spacing.');
+    rows(:, l) = r;
+    values(:, :, 1, 1, l) = layerPilots(r, cols, l);
+end
 ctx.PilotRows = rows;
 ctx.PilotCols = cols;
-ctx.PilotValues = ctx.PilotGrid(rows, cols, :, :, :);
+ctx.PilotValues = values;
+ctx.PilotsSeparable = numel(unique(rows)) == numel(rows);
 assert(all(abs(abs(ctx.PilotValues(:)) - 1) < 1e-10), ...
-    'The receiver expects unit-power pilots on the same resource elements for every layer.');
+    'The receiver expects unit-power pilots.');
 
 % Interpolation from pilots to the grid, as matrices (the paper's
 % DMRS-based baseline):
 %   H = FrequencyInterp * Hpilots * TimeInterp.'
 % Frequency: linear, extrapolated at the band edges.
 % Time: linear between pilot symbols, nearest pilot symbol held outside them.
-P = numel(rows); K = numel(cols);
-ctx.FrequencyInterp = interp1(rows, eye(P), (1:F).', 'linear', 'extrap');
+K = numel(cols);
+ctx.FrequencyInterp = zeros(F, P, L);
+for l = 1:L
+    ctx.FrequencyInterp(:, :, l) = interp1(rows(:, l), eye(P), (1:F).', 'linear', 'extrap');
+end
 if K == 1
     ctx.TimeInterp = ones(N, 1);
 else
@@ -94,7 +116,7 @@ end
 
 % Noise estimation: second differences over equally spaced pilots cancel a
 % locally linear channel; with independent noise E|d|^2 = 6*sigma^2.
-stride = pilotStride(rows);
+stride = pilotStride(rows(:, 1)); % Same spacing for every layer (checked above).
 D = zeros(0, P);
 for o = 1:stride
     idx = o:stride:P;

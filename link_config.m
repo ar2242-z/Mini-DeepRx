@@ -46,6 +46,16 @@ function cfg = link_config(varargin)
     addParameter(p,'DMRSConfigurationType',1,@(x) isnumeric(x) && isscalar(x) && ismember(x,[1 2]));
     % CDM groups left free of data in pilot symbols; 1 puts data in the gaps.
     addParameter(p,'NumCDMGroupsWithoutData',1,@(x) isnumeric(x) && isscalar(x) && ismember(x,1:3));
+    % DMRS antenna ports, one per layer (TS 38.211 6.4.1.1.3). [] (default)
+    % means 0..NumLayers-1. Ports in the same CDM group share their REs and
+    % are separated by a cover code; ports in different CDM groups sit on
+    % different subcarriers (type 1: ports 0,1 are group 0 on the even comb,
+    % ports 2,3 group 1 on the odd comb). The pilot-based receiver needs
+    % every layer in its own CDM group, e.g. [0 2] with
+    % NumCDMGroupsWithoutData 2. Pilots keep unit magnitude: the 3 dB DMRS
+    % boost of TS 38.214 Table 6.2.2-1 is not applied.
+    addParameter(p,'DMRSPortSet',[], ...
+        @(x) isnumeric(x) && (isempty(x) || (isvector(x) && all(x>=0 & x<=11 & x==fix(x)))));
     % Default operating point: 20 dB and 100 Hz. Inf means no added noise.
     addParameter(p,'SNRdB',10, ...
         @(x) isnumeric(x) && isscalar(x) && isreal(x) && (isfinite(x) || x==Inf));
@@ -100,6 +110,7 @@ function cfg = link_config(varargin)
     cfg.TimingEstimation = char(cfg.TimingEstimation);
     cfg.PACoefficients = cfg.PACoefficients(:).'; % Row vector.
     cfg.MPCoefficients = reshape(cfg.MPCoefficients, 1, []);
+    cfg.DMRSPortSet = reshape(double(cfg.DMRSPortSet), 1, []);
     assert(cfg.NumResourceBlocks<=275,'NumResourceBlocks must not exceed 275.');
     assert(cfg.NumLayers==cfg.NumTransmitAntennas, ...
         'Without a precoder, NumLayers must equal NumTransmitAntennas.');
@@ -109,6 +120,19 @@ function cfg = link_config(varargin)
         'Nfft must exceed the number of active subcarriers (12*NumResourceBlocks).');
     assert(cfg.NumCDMGroupsWithoutData<=cfg.DMRSConfigurationType+1, ...
         'DMRS type 1 has 2 CDM groups; type 2 has 3.');
+    if ~isempty(cfg.DMRSPortSet)
+        ports = cfg.DMRSPortSet;
+        assert(numel(ports)==cfg.NumLayers && numel(unique(ports))==numel(ports), ...
+            'DMRSPortSet must list NumLayers different ports.');
+        perSymbol = 4 + 2*(cfg.DMRSConfigurationType==2); % Ports per DMRS symbol.
+        assert(all(ports < perSymbol*cfg.DMRSLength), ...
+            'DMRSPortSet: type %d with DMRSLength %d has ports 0..%d.', ...
+            cfg.DMRSConfigurationType, cfg.DMRSLength, perSymbol*cfg.DMRSLength-1);
+        groups = mod(floor(ports/2), perSymbol/2);          % CDM group of each port.
+        assert(all(groups < cfg.NumCDMGroupsWithoutData), ...
+            'DMRSPortSet uses CDM group %d, so NumCDMGroupsWithoutData must be at least %d.', ...
+            max(groups), max(groups)+1);
+    end
     assert(cfg.DMRSLength==1 || cfg.DMRSAdditionalPosition<=1, ...
         'Double-symbol DMRS allows at most one additional position.');
     assert(cfg.DMRSTypeAPosition==2 || cfg.DMRSAdditionalPosition<3, ...

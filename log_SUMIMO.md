@@ -10,7 +10,7 @@ same code. Newest stage last.
 |---|---|---|
 | 0 | Layer-general shapes; one layer bit-identical to before | **done** (2026-11-12) |
 | 1 | Linear link with known channel: per-RE MIMO MMSE detection | **done** (2026-11-25) |
-| 2 | Pilot-based reception: multi-port DMRS estimation, interpolation, noise estimate | not started |
+| 2 | Pilot-based reception: multi-port DMRS estimation, interpolation, noise estimate | **done for ports on separate combs** (2026-11-25) |
 | 3 | Neural reception: train with `2*(Nr + L + Nr*L)` inputs and `Q*L` outputs | not started |
 | 4 | Coded transmission end to end with two layers | not started |
 | 5 | Nonlinear transmission: per-antenna PAs, PA compensation revisited | not started |
@@ -235,3 +235,123 @@ one-layer link still bit-identical.
   neural receiver has two layers (stage 3).
 - `MIMOCorrelation` is still fixed at `'Low'`; the sweep above is for that setting only.
 
+## Stage 2: pilot-based reception, DMRS ports 0 and 2 (2026-11-25)
+
+Goal: the conventional receiver (LS at the pilots -> linear interpolation -> stage 1
+LMMSE detection) for two layers, with each layer's DMRS on its own comb:
+
+```matlab
+cfg = link_config('NumTransmitAntennas',2,'NumLayers',2, ...
+    'DMRSConfigurationType',1,'DMRSPortSet',[0 2],'NumCDMGroupsWithoutData',2, ...
+    'DMRSLength',1,'DMRSAdditionalPosition',0);
+```
+
+Port 0 is CDM group 0 (even subcarriers, MATLAB rows 1:2:F), port 2 is CDM group 1 (odd,
+rows 2:2:F). With `NumCDMGroupsWithoutData = 2` the pilot symbol carries no data, so on
+each layer's pilot REs the other layer is silent and per-RE LS separates the layers
+exactly as for one layer. Data REs per layer: 4056 instead of 4212 (one pilot symbol).
+Ports of one CDM group (the default 0 and 1) are still refused by the pilot-based
+receiver: undoing their cover code is not implemented.
+
+### What changed
+
+- `link_config`: new `DMRSPortSet` (default `[]` = ports `0..L-1`, i.e. unchanged).
+  Checks: one different port per layer; port in range for the DMRS type and length; every
+  used CDM group must be free of data (`NumCDMGroupsWithoutData`), so `[0 2]` with 1 is
+  refused. Pilots stay unit magnitude: the 3 dB DMRS boost that TS 38.214 Table 6.2.2-1
+  gives with two data-free CDM groups is **not** applied (the receiver's unit-pilot
+  assumption and stage 0's power convention stay as they are).
+- `tx.resources`: passes `DMRSPortSet` to `nrPUSCHConfig` (only when set, so old saved
+  configurations without the field still work).
+- `rx.context`: pilot positions per layer. `PilotRows` is `P x L` (one column per layer),
+  `FrequencyInterp` is `F x P x L`, `PilotValues` holds each layer's values at its own
+  REs. New `PilotsSeparable` (no two layers share a pilot RE). Checks: every layer has its
+  pilots in the same symbols, with the same count and spacing (so one `SecondDifference`
+  serves all layers). One layer: every field has the values it had.
+- `rx.ls_estimate`: per-layer LS at each layer's own pilots; refuses non-separable ports
+  with a message naming `DMRSPortSet [0 2]`. Noise: second differences over the pilots of
+  all layers and antennas, as before. One layer: the old code path.
+- `rx.interpolate`: per-layer frequency interpolation; time interpolation unchanged.
+- `rx.receive`: `'conventional'` runs for several layers. `'knownH'` with separable ports
+  now uses `rx.ls_estimate`'s noise power like one layer does (the same value as
+  `'conventional'`); with code-separated ports it keeps stage 1's pilot residual
+  (`pilotNoise`, now computed on `PilotGrid`/`PilotMask`). The DPoI modes refuse more than
+  one layer up front.
+- `compare_snr`: `DMRSPortSet` joins the model/link consistency check.
+- `test_layers`: new part 6 (below); "not implemented" is now part 7.
+- `README.md`: `DMRSPortSet` row, `NumLayers` row, test list.
+
+### How it was verified
+
+1. **One layer unchanged.** `test_layers` part 1: all nine cases identical (exact
+   checksums, including the conventional and `'knownH'` LLRs and the network inputs).
+2. **Layout** (`test_layers` part 6): layer 1 on rows 1:2:312, layer 2 on 2:2:312,
+   `PilotsSeparable`; 4056 data REs; the default ports 0/1 are not separable.
+3. **Noiseless static link**, QPSK, true timing: LS at each layer's pilots within 3.1e-3
+   of `truth.H/sqrt(2)` (the `truth.H` floor of stage 0), interpolated channel 3.2e-3
+   RMS, noise estimate 2e-5.
+4. **Coded at 20 dB**, TDL-C 100 Hz, DMRS timing: QPSK (BER 0.0004) and 16QAM (BER 0.028)
+   decode; noise estimate / true N0 = 1.02; `'knownH'` reports the same noise power.
+5. **Config checks**: `[0 2]` with one data-free CDM group, one port for two layers, the
+   same port twice, port 4 with single-symbol type 1: all refused with a clear message.
+6. **Existing tests**: `test_tx`, `test_chan`, `test_rx`, `test_dpoi`, `test_mppa`,
+   `test_nn`, `test_ftf`: all pass
+   (76 checks, 0 failures).
+7. **SNR sweep**, LDPC R = 0.5, TDL-C 300 ns, **100 Hz**, 2 Rx, DMRS timing, 40 slots per
+   point (seeds 1-40). BLER at 0, 2, ..., 24 dB:
+
+   | Link | Receiver | BLER |
+   |---|---|---|
+   | 1x2 QPSK (default DMRS) | conventional | .800 .550 .225 .075, then 0 |
+   | 1x2 QPSK | knownH | .225 .050, then 0 |
+   | 2x2 QPSK ports 0/2 | conventional | 1 1 1 1 .875 .525 .225 .075 .050 .025 .025 .025 .075 |
+   | 2x2 QPSK ports 0/2 | knownH | 1 .925 .375 .025, then 0 |
+   | 1x2 16QAM (default DMRS) | conventional | 1 1 .950 .700 .375 .200 .050 0 0 0 0 .025 .025 |
+   | 1x2 16QAM | knownH | .975 .750 .450 .175, then 0 |
+   | 2x2 16QAM ports 0/2 | conventional | 1 1 1 1 1 1 1 .975 .875 .700 .650 .525 .600 |
+   | 2x2 16QAM ports 0/2 | knownH | 1 1 1 1 .950 .625 .250 .025, then 0 |
+
+   Uncoded BER at 24 dB: 2x2 QPSK 0.036 (knownH 0.003), 2x2 16QAM 0.094 (knownH 0.013),
+   1x2 16QAM 0.016 (knownH 0.0002). Noise estimate / true N0: 1.01-1.02 throughout.
+
+### Finding: a Doppler error floor with two layers and one pilot symbol
+
+At 100 Hz the two-layer conventional receiver does not reach low BLER: 2x2 16QAM stays at
+BLER 0.5-0.6 from 18 to 24 dB, and 2x2 QPSK floors at a few percent. Diagnosis, 16QAM,
+24 dB, 10 slots each (H NMSE over the slots with exact timing):
+
+| Case | BER | BLER | mean err^2 / nu | H NMSE |
+|---|---|---|---|---|
+| 2x2, 100 Hz, DMRS timing | 0.105 | 0.5 | 8.6 | -16.8 dB |
+| 2x2, 100 Hz, perfect timing | 0.105 | 0.5 | 8.7 | -14.0 dB |
+| 2x2, 0 Hz | 0.035 | 0 | 2.2 | -23.4 dB |
+| 2x2, 10 Hz | 0.041 | 0 | 2.3 | -25.2 dB |
+| 2x2, 100 Hz, `DMRSAdditionalPosition 1` | 0.037 | 0 | 2.1 | -23.5 dB |
+| 1x2, 100 Hz (default) | 0.018 | 0 | 10.7 | -16.4 dB |
+| 1x2, 0 Hz (default) | 0.0009 | 0 | 1.7 | -24.1 dB |
+
+- Not timing (perfect timing changes nothing) and not the port separation (static and
+  10 Hz decode).
+- The cause is the single pilot symbol: the channel is held constant over the slot, so at
+  100 Hz the estimate is off by about -15 dB NMSE. One layer survives that (BLER 0). With
+  two layers the estimation error on each layer's channel leaks the *other* layer's
+  symbols into it, the MMSE inversion amplifies it on poorly conditioned REs, and `nu`
+  (thermal noise only) under-reports the error by about 9x: overconfident LLRs, and LDPC
+  fails.
+- A second pilot symbol (`DMRSAdditionalPosition 1`, linear time interpolation) removes
+  the floor at 100 Hz.
+- Even static, the two-layer estimate costs more than one layer's: each layer's pilots
+  carry half the RE power (no 3 dB boost), visible in 2x2 conventional versus knownH
+  (BER 0.035 versus about 0.013 at 24 dB).
+
+### Not done in stage 2, and options
+
+- Ports of one CDM group (0/1): undoing the frequency cover code (averaging adjacent pilot
+  pairs) is not implemented; `rx.ls_estimate` refuses them.
+- Options against the floor, each a small change: (a) use `DMRSAdditionalPosition >= 1`
+  for two layers at 100 Hz; (b) apply the 3 dB DMRS boost with two data-free CDM groups
+  (the receiver must then know the pilot amplitude); (c) add the channel-estimation error
+  variance to `nu` in `rx.equalize` (`sigma2 + sum_l var(dH_l)` per layer), so the LLRs
+  stop being overconfident. The neural receiver of stage 3 should learn (c) by itself; the
+  baseline it is compared with should get at least (a) or (c) to be fair.
+- `MIMOCorrelation` is still fixed at `'Low'`.

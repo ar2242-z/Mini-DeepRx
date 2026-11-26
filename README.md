@@ -79,6 +79,7 @@ up-conversion to the carrier frequency (all signals are complex baseband).
 | `Coding` | `'none'` | `'ldpc'` for 5G UL-SCH coding |
 | `TargetCodeRate` | 0.5 | Information bits / coded bits (LDPC only) |
 | `DMRSTypeAPosition`, `DMRSLength`, `DMRSAdditionalPosition`, `DMRSConfigurationType`, `NumCDMGroupsWithoutData` | 2, 1, 0, 1, 1 | DMRS pilot pattern (TS 38.211 6.4.1.1); default is one pilot symbol at MATLAB column 3 on every 2nd subcarrier |
+| `DMRSPortSet` | `[]` (ports 0..L-1) | DMRS antenna port of each layer. The pilot-based receiver needs each layer in its own CDM group, e.g. `[0 2]` with `NumCDMGroupsWithoutData` 2 (layer 1 on the even comb, layer 2 on the odd comb). Pilots stay at unit magnitude (no 3 dB DMRS boost) |
 | `PAModel` | `'none'` | `'none'`, `'rapp'` or `'polynomial'` (miniPA), `'mp3gpp'` (memory polynomial, [MPPA.md](MPPA.md)) |
 | `PABackoffdB` | 6 | miniPA: input RMS below PA saturation, dB. `'mp3gpp'`: mean output power below the output power at P1dB, dB |
 | `RappSmoothness`, `PACoefficients` | 2, `[1 -1/3]` | miniPA parameters |
@@ -143,7 +144,7 @@ must not read them.
 | `MaximumDopplerShift` | 100 | Hz; 0 is a static channel |
 | `CarrierFrequency` | 3.5e9 | Hz (CDL only) |
 | `NumReceiveAntennas` | 2 | Receive antennas |
-| `NumTransmitAntennas`, `NumLayers` | 1, 1 | SU-MIMO in progress (see `log_SUMIMO.md`): the transmitter, channel, labels and network input handle more than one layer, and so does the `'knownH'` receiver (per-RE MIMO LMMSE detection); the pilot-based and neural receivers handle one layer so far |
+| `NumTransmitAntennas`, `NumLayers` | 1, 1 | SU-MIMO in progress (see `log_SUMIMO.md`): the transmitter, channel, labels and network input handle more than one layer, and so do the `'knownH'` receiver (per-RE MIMO LMMSE detection) and the `'conventional'` receiver when each layer has its own CDM group (`DMRSPortSet`); the DPoI and neural receivers handle one layer so far |
 | `SNRdB` | 10 | Es/N0 per resource element per antenna; `Inf` = no noise |
 | `SIRdB` | `Inf` | Signal-to-interference ratio; `Inf` = no interferer |
 | `Seed` | 42 | Fixes the fading realization (and the interferer) |
@@ -732,7 +733,7 @@ test_ftf         % frequency-domain hybrid: transforms, parameters, gradients, t
 test_train       % training options: schedule, clipping, Resume, range test (CPU only)
 test_mppa        % 3GPP memory polynomial PA and 64QAM (see MPPA.md)
 test_dpoi        % Digital Post-Inverse baseline and channel smoothing (CPU, ~1 min)
-test_layers      % one layer unchanged against stored checksums; two-layer shapes and known-channel MIMO detection (CPU, ~1 min)
+test_layers      % one layer unchanged against stored checksums; two-layer shapes, known-channel and pilot-based MIMO reception (CPU, ~1 min)
 ```
 
 `test_chan` checks the channel against physics: Y = H·X for a static channel and growing intercarrier interference with Doppler, average channel power of 1

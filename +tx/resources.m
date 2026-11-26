@@ -8,7 +8,7 @@ function res = resources(carrier, cfg)
 %     PilotIndices  P x L linear indices of each layer's DMRS port
 %     Pilots        P x L DMRS symbols at PilotIndices
 %   With one layer these are the columns they always were. The DMRS ports
-%   are the toolbox default 0..L-1.
+%   are cfg.DMRSPortSet, or the toolbox default 0..L-1 when it is empty.
 % Unused CDM groups stay empty. Their 3 dB DMRS power boost is not applied:
 % pilots keep unit magnitude, which the LS receiver relies on.
 pusch = nrPUSCHConfig;
@@ -24,6 +24,9 @@ pusch.DMRS.DMRSLength = cfg.DMRSLength;
 pusch.DMRS.DMRSAdditionalPosition = cfg.DMRSAdditionalPosition; % Extra pilot symbols.
 pusch.DMRS.DMRSConfigurationType = cfg.DMRSConfigurationType;
 pusch.DMRS.NumCDMGroupsWithoutData = cfg.NumCDMGroupsWithoutData;
+if isfield(cfg, 'DMRSPortSet') && ~isempty(cfg.DMRSPortSet)
+    pusch.DMRS.DMRSPortSet = cfg.DMRSPortSet;
+end
 res.DataIndices = nrPUSCHIndices(carrier, pusch);
 res.PilotIndices = nrPUSCHDMRSIndices(carrier, pusch);
 res.Pilots = nrPUSCHDMRS(carrier, pusch);

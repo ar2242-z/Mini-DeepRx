@@ -22,11 +22,12 @@ function [llr, trace] = receive(rxWaveform, ctx, mode, genie, options)
 %                     mode uses g.*H too. The distortion itself stays an
 %                     impairment. With Nt transmit antennas the data sees
 %                     g.*H/sqrt(Nt) (tx.transmit's power scaling), so that
-%                     is the channel used. With more than one layer the
-%                     DMRS ports cannot be separated yet (rx.ls_estimate),
-%                     so the noise power comes instead from the pilot
-%                     residual with the true channel (pilotNoise below);
-%                     detection is the per-RE MIMO LMMSE of rx.equalize.
+%                     is the channel used. Detection is the per-RE MIMO
+%                     LMMSE of rx.equalize. When the layers' DMRS ports
+%                     share their REs (one CDM group, e.g. the default
+%                     ports 0 and 1), rx.ls_estimate cannot give the noise
+%                     power, so it comes from the pilot residual with the
+%                     true channel instead (pilotNoise below).
 %     'dpoi'          Digital Post-Inverse (Babaroglu et al., WAMICON 2023),
 %                     the conventional receiver-side PA compensation: LS at
 %                     the pilots -> delay-domain smoothing (rx.delay_estimate)
@@ -47,9 +48,11 @@ function [llr, trace] = receive(rxWaveform, ctx, mode, genie, options)
 %   options: struct of rx.dpoi options (Orders, Memory, Oversampling, Ridge)
 %   plus DelayWindow and DelayRidge for rx.delay_estimate; DPoI modes only.
 %   llr: (Q*L*D) x 1 LLRs, log P(0)/P(1), in transmit bit order; pass to
-%   rx.ldpc_decode when coded. 'knownH' handles any number of layers;
-%   the other modes handle one layer (L = 1) for now: rx.ls_estimate
-%   (DMRS port separation) and rx.dpoi reject more.
+%   rx.ldpc_decode when coded. 'knownH' handles any number of layers.
+%   'conventional' handles several layers when each layer has its own CDM
+%   group (e.g. cfg.DMRSPortSet [0 2], NumCDMGroupsWithoutData 2):
+%   rx.ls_estimate refuses code-separated ports. The DPoI modes handle one
+%   layer.
 %   trace: Offset, Y, Hp, H, Sigma2, Xhat, Nu (the receiver checkpoints),
 %   and DPoI (rx.dpoi's info) in the DPoI modes.
 if nargin < 4 || isempty(genie)
@@ -59,6 +62,8 @@ if nargin < 5
     options = struct();
 end
 trueChannel = any(strcmp(mode, {'knownH', 'dpoi_knownH'}));
+assert(ctx.NumLayers == 1 || any(strcmp(mode, {'conventional', 'knownH'})), ...
+    'Receiver mode %s handles one layer only.', mode);
 if trueChannel
     ctx.TimingEstimation = 'perfect';
 end
@@ -75,7 +80,7 @@ if trueChannel
     if isfield(genie, 'PAGain'), H = H .* genie.PAGain; end
     if ctx.NumTransmitAntennas > 1, H = H / sqrt(ctx.NumTransmitAntennas); end
 end
-if trueChannel && ctx.NumLayers > 1
+if trueChannel && ~ctx.PilotsSeparable
     Hp = [];
     sigma2 = pilotNoise(Y, H, ctx);
 else
@@ -122,13 +127,11 @@ end
 function sigma2 = pilotNoise(Y, H, ctx)
     % Noise (plus interference and PA distortion) power per RE from the
     % pilots, given the true channel: the residual Y - sum_l H_l X_l at
-    % the pilot REs, averaged over pilots, pilot symbols and antennas.
-    % 1 x 1 x 1 x B. Used by 'knownH' with several layers, whose DMRS
-    % ports share their REs and so defeat rx.ls_estimate's estimate.
-    B = size(Y, 4);
-    Yp = Y(ctx.PilotRows, ctx.PilotCols, :, :);
-    Hp = H(ctx.PilotRows, ctx.PilotCols, :, :, :);
-    r = Yp - sum(Hp .* ctx.PilotValues, 5);
-    r = reshape(r, [], B);
+    % the pilot REs of all layers, averaged over pilots and antennas.
+    % 1 x 1 x 1 x B. Used by 'knownH' when the layers' DMRS ports share
+    % their REs, which defeats rx.ls_estimate's estimate.
+    [F, N, Nr, B] = size(Y);
+    r = reshape(Y - sum(H .* ctx.PilotGrid, 5), F*N, Nr, B);
+    r = reshape(r(ctx.PilotMask(:), :, :), [], B);
     sigma2 = reshape(mean(real(r).^2 + imag(r).^2, 1), 1, 1, 1, B);
 end

@@ -18,7 +18,10 @@ function passed = test_layers(action)
 % 5. Two layers with the known channel (stage 1): rx.equalize against a
 %    per-RE reference, its one-layer limit, and the 'knownH' receiver end
 %    to end (noiseless symbols, noise estimate, LDPC decoding).
-% 6. What is not implemented yet fails with a clear message.
+% 6. Two layers from pilots (stage 2), DMRS ports 0 and 2 on separate
+%    combs: per-layer pilot layout, LS estimates against the true channel,
+%    the conventional receiver end to end, and the DMRSPortSet checks.
+% 7. What is not implemented yet fails with a clear message.
 
 if nargin < 1, action = 'check'; end
 passed = true;
@@ -204,8 +207,56 @@ for modulation = {'QPSK','16QAM'}
         modulation{1},r.UncodedErrors/r.UncodedBits,ratio)) && passed;
 end
 
-%% 6. Not implemented yet: clear errors
-fprintf('6. Not implemented yet\n');
+%% 6. Two layers from pilots: DMRS ports 0 and 2
+fprintf('6. Two layers from pilots: DMRS ports 0 and 2 (separate combs)\n');
+combs = {'DMRSConfigurationType',1,'DMRSPortSet',[0 2],'NumCDMGroupsWithoutData',2, ...
+    'DMRSLength',1,'DMRSAdditionalPosition',0};
+cfg = link_config(two{:},combs{:},'SNRdB',Inf,'MaximumDopplerShift',0,'TimingEstimation','perfect');
+ctx = rx.context(cfg);
+ok = ctx.PilotsSeparable && isequal(ctx.PilotRows,[(1:2:F).' (2:2:F).']) && ...
+    numel(ctx.DataIndices) == F*(N-numel(ctx.PilotCols)) && ...
+    ~rx.context(link_config(two{:})).PilotsSeparable;
+passed = report(ok,sprintf(['layer 1 on the even comb, layer 2 on the odd comb, no data in the ' ...
+    'pilot symbol (%d data REs); ports 0 and 1 are not separable'],numel(ctx.DataIndices))) && passed;
+[rxWaveform,truth] = sim.run_link(cfg);
+[~,t] = rx.receive(rxWaveform,ctx,'conventional',truth);
+Ht = truth.H/sqrt(2);                                   % What the pilots see.
+err = 0;
+for l = 1:L
+    err = max(err,relErr(t.Hp(:,:,:,1,l),Ht(ctx.PilotRows(:,l),ctx.PilotCols,:,1,l)));
+end
+interp = rms(t.H(:)-Ht(:))/rms(Ht(:));
+% Floor: truth.H matches the channel to about 1e-3 (part 3).
+passed = report(err < 5e-3 && interp < 1e-2 && t.Sigma2 < 1e-4,sprintf( ...
+    'no noise, static: LS at each layer''s pilots within %.1e of H/sqrt(2), interpolated %.1e rms, noise %.1e', ...
+    err,interp,t.Sigma2)) && passed;
+
+for modulation = {'QPSK','16QAM'}
+    cfg = link_config(two{:},combs{:},'Modulation',modulation{1},'Coding','ldpc','SNRdB',20);
+    ctx = rx.context(cfg);
+    [rxWaveform,truth] = sim.run_link(cfg);
+    [llr,t] = rx.receive(rxWaveform,ctx,'conventional',truth);
+    r = sim.evaluate(llr,truth,cfg);
+    [~,tk] = rx.receive(rxWaveform,ctx,'knownH',truth);
+    ratio = t.Sigma2/truth.NoiseVariance;
+    passed = report(r.BlockError == 0 && ratio > 0.8 && ratio < 1.5 && ~isempty(tk.Hp) && tk.Sigma2 == t.Sigma2, ...
+        sprintf(['%-5s conventional at 20 dB: uncoded BER %.4f, CRC passes; noise estimate / true %.2f ' ...
+        '(knownH uses the same)'],modulation{1},r.UncodedErrors/r.UncodedBits,ratio)) && passed;
+end
+
+passed = report(fails(@() link_config(two{:},'DMRSPortSet',[0 2]),'NumCDMGroupsWithoutData'), ...
+    'ports 0 and 2 with data in the second comb: link_config refuses') && passed;
+passed = report(fails(@() link_config(two{:},'DMRSPortSet',0),'NumLayers different ports') && ...
+    fails(@() link_config(two{:},'DMRSPortSet',[2 2],'NumCDMGroupsWithoutData',2),'NumLayers different ports'), ...
+    'one port for two layers, or the same port twice: link_config refuses') && passed;
+passed = report(fails(@() link_config(two{:},'DMRSPortSet',[0 4],'NumCDMGroupsWithoutData',2),'ports 0..3'), ...
+    'port 4 with single-symbol type 1 DMRS: link_config refuses') && passed;
+
+%% 7. Not implemented yet: clear errors
+fprintf('7. Not implemented yet\n');
+cfg = link_config(two{:},'SNRdB',20);                   % Default ports 0 and 1: one CDM group.
+ctx = rx.context(cfg);
+[rxWaveform,truth] = sim.run_link(cfg);
 passed = report(fails(@() rx.receive(rxWaveform,ctx,'conventional'),'DMRS ports'), ...
     'conventional receiver with two layers: rx.ls_estimate refuses') && passed;
 passed = report(fails(@() rx.receive(rxWaveform,ctx,'dpoi_knownH',truth),'one layer'), ...
